@@ -1,0 +1,5 @@
+{
+  "execMap": {
+    "ts": "node --inspect=0.0.0.0:9229 --no-warnings=ExperimentalWarning --loader ts-node/esm"
+  }
+}
