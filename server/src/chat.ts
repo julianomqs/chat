@@ -137,6 +137,7 @@ export const initChat = (io: Server) => {
           chatMessage.message = message;
           chatMessage.dateTime = dateTime;
           chatMessage.receiver = recipient.name;
+          chatMessage.private = true;
 
           chatRoom.messages.add(chatMessage);
           await service.save(chatRoom);

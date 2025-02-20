@@ -103,6 +103,16 @@
           "length": 20,
           "mappedType": "string"
         },
+        "private": {
+          "name": "private",
+          "type": "tinyint(1)",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "length": 1,
+          "mappedType": "boolean"
+        },
         "room_id": {
           "name": "room_id",
           "type": "int",

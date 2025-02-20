@@ -18,6 +18,9 @@ export class ChatMessage {
   @Property({ length: 20, nullable: true })
   receiver!: string;
 
+  @Property()
+  private: boolean = false;
+
   @ManyToOne()
   room!: ChatRoom;
 }
