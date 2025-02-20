@@ -57,3 +57,9 @@ Run the command in the root folder:
 ```
 docker-compose up -d
 ```
+
+## URLs
+
+`/chatRooms` - Create chatRooms
+
+`/` - List chat rooms. Click in one to proceed to chat page
