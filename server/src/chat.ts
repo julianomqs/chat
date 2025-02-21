@@ -3,7 +3,8 @@ import { Server } from "socket.io";
 import { z } from "zod";
 import { ChatMessage } from "./chat-message.entity.js";
 import { ChatRoomService } from "./chat-room-service.js";
-import { CHAT_ROOMS } from "./chat-rooms.js";
+import { CHAT_ROOMS, ChatUser } from "./chat-rooms.js";
+import { ChatRoom } from "./chat-room.entity.js";
 
 const service = new ChatRoomService();
 
@@ -28,6 +29,48 @@ export const initChat = (io: Server) => {
   io.on("connection", (socket) => {
     let userName = "";
     let currentRoomId = -1;
+
+    const emitPeople = (users: Map<string, ChatUser>) => {
+      io.to(`${currentRoomId}`).emit("people", [
+        { id: "-1", name: "Everyone", blocked: [] },
+        ...Array.from(users.values()).map((user) => ({
+          ...user,
+          blocked: Array.from(user.blocked)
+        }))
+      ]);
+    };
+
+    const saveChatRoom = async (
+      chatRoom: ChatRoom,
+      {
+        sender,
+        message,
+        dateTime,
+        receiver,
+        privateMessage = false
+      }: {
+        sender: string;
+        message: string;
+        dateTime: Date;
+        receiver?: string;
+        privateMessage?: boolean;
+      }
+    ) => {
+      const chatMessage = new ChatMessage();
+
+      chatMessage.sender = sender;
+      chatMessage.message = message;
+      chatMessage.dateTime = dateTime;
+
+      if (receiver) {
+        chatMessage.receiver = receiver;
+      }
+
+      chatMessage.private = privateMessage;
+
+      chatRoom.messages.add(chatMessage);
+      await service.save(chatRoom);
+    };
 
     socket.on("join", async ({ roomId, name }, callback) => {
       const result = joinSchema.safeParse({ roomId, name });
@@ -57,13 +100,7 @@ export const initChat = (io: Server) => {
       users.set(name, { id: socket.id, name, blocked: new Set<string>() });
       CHAT_ROOMS.addRoom(roomId, users);
 
-      io.to(`${roomId}`).emit("people", [
-        { id: "-1", name: "Everyone", blocked: [] },
-        ...Array.from(users.values()).map((user) => ({
-          ...user,
-          blocked: Array.from(user.blocked)
-        }))
-      ]);
+      emitPeople(users);
 
       const dateTime = new Date();
 
@@ -73,13 +110,11 @@ export const initChat = (io: Server) => {
         dateTime: formatISO(dateTime)
       });
 
-      const message = new ChatMessage();
-      message.sender = "CHAT";
-      message.message = `${name} entered the room...`;
-      message.dateTime = dateTime;
-
-      chatRoom.messages.add(message);
-      await service.save(chatRoom);
+      await saveChatRoom(chatRoom, {
+        sender: "CHAT",
+        message: `${name} entered the room...`,
+        dateTime: dateTime
+      });
 
       io.to(socket.id).emit("updateUser", { id: socket.id, name, blocked: [] });
 
@@ -96,14 +131,14 @@ export const initChat = (io: Server) => {
           target
         });
 
+        if (!result.success) {
+          return callback({ error: "Invalid input!" });
+        }
+
         const chatRoom = await service.findById(currentRoomId);
 
         if (!chatRoom) {
           return callback({ error: "Invalid room!" });
-        }
-
-        if (!result.success) {
-          return callback({ error: "Invalid input!" });
         }
 
         const users = CHAT_ROOMS.getUsers(currentRoomId);
@@ -132,15 +167,13 @@ export const initChat = (io: Server) => {
             private: true
           });
 
-          const chatMessage = new ChatMessage();
-          chatMessage.sender = sender.name;
-          chatMessage.message = message;
-          chatMessage.dateTime = dateTime;
-          chatMessage.receiver = recipient.name;
-          chatMessage.private = true;
-
-          chatRoom.messages.add(chatMessage);
-          await service.save(chatRoom);
+          await saveChatRoom(chatRoom, {
+            sender: sender.name,
+            message,
+            dateTime,
+            receiver: recipient.name,
+            privateMessage: true
+          });
 
           if (
             sender.blocked.has(recipient.name) ||
@@ -164,14 +197,12 @@ export const initChat = (io: Server) => {
             receiver: target
           });
 
-          const chatMessage = new ChatMessage();
-          chatMessage.sender = sender.name;
-          chatMessage.message = message;
-          chatMessage.dateTime = dateTime;
-          chatMessage.receiver = target;
-
-          chatRoom.messages.add(chatMessage);
-          await service.save(chatRoom);
+          await saveChatRoom(chatRoom, {
+            sender: sender.name,
+            message,
+            dateTime,
+            receiver: target
+          });
 
           for (const [, user] of users) {
             if (sender.name === user.name) {
@@ -243,13 +274,7 @@ export const initChat = (io: Server) => {
         blocked: Array.from(user.blocked)
       });
 
-      io.to(`${currentRoomId}`).emit("people", [
-        { id: "-1", name: "Everyone", blocked: [] },
-        ...Array.from(users.values()).map((u) => ({
-          ...u,
-          blocked: Array.from(u.blocked)
-        }))
-      ]);
+      emitPeople(users);
     });
 
     socket.on("disconnect", async () => {
@@ -283,13 +308,7 @@ export const initChat = (io: Server) => {
         CHAT_ROOMS.deleteRoom(currentRoomId);
       }
 
-      io.to(`${currentRoomId}`).emit("people", [
-        { id: "-1", name: "Everyone", blocked: [] },
-        ...Array.from(users.values()).map((user) => ({
-          ...user,
-          blocked: Array.from(user.blocked)
-        }))
-      ]);
+      emitPeople(users);
 
       const dateTime = new Date();
 
@@ -299,13 +318,11 @@ export const initChat = (io: Server) => {
         dateTime: formatISO(dateTime)
       });
 
-      const chatMessage = new ChatMessage();
-      chatMessage.sender = "CHAT";
-      chatMessage.message = `${userName} exited the room...`;
-      chatMessage.dateTime = dateTime;
-
-      chatRoom.messages.add(chatMessage);
-      await service.save(chatRoom);
+      await saveChatRoom(chatRoom, {
+        sender: "CHAT",
+        message: `${userName} exited the room...`,
+        dateTime
+      });
     });
   });
 };

@@ -1,13 +1,13 @@
-class ChatRoomsRepo {
-  private rooms = new Map<
-    number,
-    Map<string, { id: string; name: string; blocked: Set<string> }>
-  >();
+export interface ChatUser {
+  id: string;
+  name: string;
+  blocked: Set<string>;
+}
 
-  addRoom(
-    id: number,
-    users: Map<string, { id: string; name: string; blocked: Set<string> }>
-  ) {
+class ChatRoomsRepo {
+  private rooms = new Map<number, Map<string, ChatUser>>();
+
+  addRoom(id: number, users: Map<string, ChatUser>) {
     this.rooms.set(id, users);
   }
 
@@ -20,10 +20,7 @@ class ChatRoomsRepo {
   }
 
   getUsers(id: number) {
-    return (
-      this.rooms.get(id) ||
-      new Map<string, { id: string; name: string; blocked: Set<string> }>()
-    );
+    return this.rooms.get(id) || new Map<string, ChatUser>();
   }
 }
 
