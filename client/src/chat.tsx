@@ -330,7 +330,17 @@ const LoginDialog = ({
   const toastRef = useToast();
 
   const schema = z.object({
-    name: z.string().max(20)
+    name: z
+      .string()
+      .max(20)
+      .superRefine((val, ctx) => {
+        if (val.trim().length === 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Name is required"
+          });
+        }
+      })
   });
 
   type FormData = z.infer<typeof schema>;
