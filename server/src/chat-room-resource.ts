@@ -123,7 +123,11 @@ router.get(
     const chatRoom = await service.findById(parseInt(req.params.id));
 
     if (chatRoom) {
-      res.status(200).send(chatRoom);
+      res.status(200).send({
+        createdAt: chatRoom.createdAt,
+        id: chatRoom.id,
+        name: chatRoom.name
+      });
     } else {
       res.status(404).send({ message: "ChatRoom não encontrada." });
     }

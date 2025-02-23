@@ -289,7 +289,7 @@ const Footer = ({
                           life: 5000
                         });
                       } else {
-                        localStorage.removeItem("user");
+                        sessionStorage.removeItem("user");
                         navigate("/");
                       }
                     }
@@ -448,7 +448,7 @@ const Chat = () => {
 
   useEffect(() => {
     const handleUpdateUser = (user: ChatUser) => {
-      localStorage.setItem(
+      sessionStorage.setItem(
         "user",
         JSON.stringify({
           roomId: chatRoom?.id,
@@ -468,7 +468,7 @@ const Chat = () => {
   }, [chatRoom?.id]);
 
   useEffect(() => {
-    const user = localStorage.getItem("user");
+    const user = sessionStorage.getItem("user");
 
     if (user) {
       const { roomId, name, uuid } = JSON.parse(user);
@@ -500,7 +500,7 @@ const Chat = () => {
 
   useEffect(() => {
     const interval = setInterval(() => {
-      const user = localStorage.getItem("user");
+      const user = sessionStorage.getItem("user");
 
       if (socket.connected && user) {
         const { roomId, name } = JSON.parse(user);
