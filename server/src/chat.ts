@@ -6,14 +6,14 @@ import { ChatMessage } from "./chat-message.entity.js";
 import { ChatRoomService } from "./chat-room-service.js";
 import { ChatRoom } from "./chat-room.entity.js";
 import { CHAT_ROOMS, ChatUser } from "./chat-rooms.js";
-import { id } from "date-fns/locale";
 
 const service = new ChatRoomService();
 
 const joinSchema = z.object({
   roomId: z.number().positive(),
   name: z.string().min(1).max(20),
-  uuid: z.string().uuid().optional()
+  uuid: z.string().uuid().optional(),
+  color: z.string().optional()
 });
 
 const heartbeatSchema = z.object({
@@ -43,7 +43,10 @@ export const initChat = (io: Server) => {
     io.to(`${roomId}`).emit("people", [
       { id: "-1", name: "Everyone", blocked: [] },
       ...Array.from(users.values()).map((user) => ({
-        ...user,
+        id: user.id,
+        name: user.name,
+        uuid: user.uuid,
+        color: user.color,
         blocked: Array.from(user.blocked)
       }))
     ]);
@@ -130,8 +133,8 @@ export const initChat = (io: Server) => {
   process.on("SIGTERM", shutdown);
 
   io.on("connection", (socket) => {
-    socket.on("join", async ({ roomId, name, uuid }, callback) => {
-      const result = joinSchema.safeParse({ roomId, name, uuid });
+    socket.on("join", async ({ roomId, name, uuid, color }, callback) => {
+      const result = joinSchema.safeParse({ roomId, name, uuid, color });
 
       if (!result.success) {
         return callback({ error: "Invalid input!" });
@@ -179,7 +182,8 @@ export const initChat = (io: Server) => {
             message: m.message,
             dateTime: formatISO(m.dateTime),
             receiver: m.receiver,
-            private: m.private
+            private: m.private,
+            color: m.sender === "CHAT" ? undefined : user.color
           }))
         );
       } else {
@@ -214,7 +218,8 @@ export const initChat = (io: Server) => {
           blocked: user.blocked,
           uuid: newUuid,
           joined: user.joined,
-          lastSeen: newDate
+          lastSeen: newDate,
+          color: user.color
         });
       } else {
         users.set(name, {
@@ -223,7 +228,8 @@ export const initChat = (io: Server) => {
           blocked: new Set<string>(),
           uuid: newUuid,
           joined: newDate,
-          lastSeen: newDate
+          lastSeen: newDate,
+          color
         });
       }
 
@@ -324,7 +330,8 @@ export const initChat = (io: Server) => {
             message: message,
             dateTime: dateTimeString,
             receiver: recipient.name,
-            private: true
+            private: true,
+            color: sender.color
           });
 
           if (
@@ -340,7 +347,8 @@ export const initChat = (io: Server) => {
             message: message,
             dateTime: dateTimeString,
             receiver: recipient.name,
-            private: true
+            private: true,
+            color: sender.color
           });
         } else {
           const savedChatMessage = await saveChatMessage(chatRoom, {
@@ -355,7 +363,8 @@ export const initChat = (io: Server) => {
             sender: sender.name,
             message,
             dateTime: dateTimeString,
-            receiver: target
+            receiver: target,
+            color: sender.color
           });
 
           for (const [, user] of users) {
@@ -386,7 +395,8 @@ export const initChat = (io: Server) => {
               sender: sender.name,
               message,
               dateTime: dateTimeString,
-              receiver: target
+              receiver: target,
+              color: sender.color
             });
           }
         }

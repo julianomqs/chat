@@ -3,6 +3,7 @@ import { format, parseISO } from "date-fns";
 import { Button } from "primereact/button";
 import { Card } from "primereact/card";
 import { Checkbox } from "primereact/checkbox";
+import { ColorPicker } from "primereact/colorpicker";
 import { confirmDialog } from "primereact/confirmdialog";
 import { Dialog } from "primereact/dialog";
 import { InputText } from "primereact/inputtext";
@@ -28,6 +29,17 @@ interface ChatUser {
   name: string;
   blocked: string[];
   uuid?: string;
+  color?: string;
+}
+
+interface ChatMessage {
+  id: number;
+  sender: string;
+  receiver?: string;
+  message: string;
+  dateTime: string;
+  private?: boolean;
+  color?: string;
 }
 
 const Sidebar = ({
@@ -80,12 +92,15 @@ const Sidebar = ({
               className={`flex align-items-center ${
                 isBlocked ? "opacity-50" : ""
               }`}
+              style={{ color: option.color ? `#${option.color}` : undefined }}
             >
               {option.name === user?.name && (
                 <i className="pi pi-star mr-2"></i>
               )}
-              <div>{option.name}</div>
-              {isBlocked && <i className="pi pi-ban ml-auto text-red-500"></i>}
+              <div className={option.name === user?.name ? "font-bold" : ""}>
+                {option.name}
+              </div>
+              {isBlocked && <i className="pi pi-ban ml-auto"></i>}
             </div>
           );
         }}
@@ -127,15 +142,6 @@ const Sidebar = ({
   );
 };
 
-interface ChatMessage {
-  id: number;
-  sender: string;
-  receiver?: string;
-  message: string;
-  dateTime: string;
-  private?: boolean;
-}
-
 const Messages = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
@@ -162,14 +168,47 @@ const Messages = () => {
   return (
     <Card className="flex-1 overflow-y-auto">
       {messages.map((m, idx) => {
-        let title = "";
+        let title = null;
 
         if (m.private === true) {
-          title = `${m.sender} says privately to ${m.receiver}:`;
+          title = (
+            <>
+              <span
+                style={{
+                  color: m?.color ? `#${m.color}` : undefined
+                }}
+              >
+                {m.sender}
+              </span>{" "}
+              says privately to {m.receiver}:
+            </>
+          );
         } else if (m.receiver) {
-          title = `${m.sender} says to ${m.receiver}:`;
+          title = (
+            <>
+              <span
+                style={{
+                  color: m?.color ? `#${m.color}` : undefined
+                }}
+              >
+                {m.sender}
+              </span>{" "}
+              says to {m.receiver}:
+            </>
+          );
         } else {
-          title = `${m.sender} says:`;
+          title = (
+            <>
+              <span
+                style={{
+                  color: m?.color ? `#${m.color}` : undefined
+                }}
+              >
+                {m.sender}
+              </span>{" "}
+              says:
+            </>
+          );
         }
 
         return (
@@ -340,7 +379,8 @@ const LoginDialog = ({
             message: "Name is required"
           });
         }
-      })
+      }),
+    color: z.string().optional()
   });
 
   type FormData = z.infer<typeof schema>;
@@ -352,7 +392,8 @@ const LoginDialog = ({
   } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: {
-      name: ""
+      name: "",
+      color: undefined
     }
   });
 
@@ -361,7 +402,8 @@ const LoginDialog = ({
       "join",
       {
         roomId: chatRoom?.id,
-        name: data.name
+        name: data.name,
+        color: data.color
       },
       (response: { error?: string }) => {
         if (response?.error) {
@@ -421,6 +463,18 @@ const LoginDialog = ({
             {errors.name && (
               <small className="p-error">{errors.name.message}</small>
             )}
+          </div>
+          <div className="col-12">
+            <label htmlFor="color" className="block mb-1">
+              Color
+            </label>
+            <Controller
+              name="color"
+              control={control}
+              render={({ field }) => (
+                <ColorPicker id="color" {...field} className="mb-1" />
+              )}
+            />
           </div>
         </div>
       </form>
@@ -515,15 +569,30 @@ const Chat = () => {
       if (socket.connected && user) {
         const { roomId, name } = JSON.parse(user);
 
-        socket.emit("heartbeat", {
-          roomId,
-          name
-        });
+        socket.emit(
+          "heartbeat",
+          {
+            roomId,
+            name
+          },
+          (response: { error?: string }) => {
+            if (response?.error) {
+              if (response?.error) {
+                toastRef?.current?.show?.({
+                  severity: "error",
+                  summary: "Error",
+                  detail: response.error,
+                  life: 5000
+                });
+              }
+            }
+          }
+        );
       }
     }, 30000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [toastRef]);
 
   return (
     <>

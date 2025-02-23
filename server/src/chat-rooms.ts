@@ -5,6 +5,7 @@ export interface ChatUser {
   uuid: string;
   joined: Date;
   lastSeen: Date;
+  color?: string;
 }
 
 class ChatRoomsRepo {
