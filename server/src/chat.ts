@@ -1,14 +1,22 @@
-import { formatISO } from "date-fns";
+import { differenceInMilliseconds, formatISO } from "date-fns";
 import { Server } from "socket.io";
+import { v7 as uuidv7 } from "uuid";
 import { z } from "zod";
 import { ChatMessage } from "./chat-message.entity.js";
 import { ChatRoomService } from "./chat-room-service.js";
-import { CHAT_ROOMS, ChatUser } from "./chat-rooms.js";
 import { ChatRoom } from "./chat-room.entity.js";
+import { CHAT_ROOMS, ChatUser } from "./chat-rooms.js";
+import { id } from "date-fns/locale";
 
 const service = new ChatRoomService();
 
 const joinSchema = z.object({
+  roomId: z.number().positive(),
+  name: z.string().min(1).max(20),
+  uuid: z.string().uuid().optional()
+});
+
+const heartbeatSchema = z.object({
   roomId: z.number().positive(),
   name: z.string().min(1).max(20)
 });
@@ -25,55 +33,105 @@ const blockSchema = z.object({
   target: z.string().min(1).max(20)
 });
 
+const logoutSchema = z.object({
+  roomId: z.number().positive(),
+  name: z.string().min(1).max(20)
+});
+
 export const initChat = (io: Server) => {
+  const emitPeople = (roomId: number, users: Map<string, ChatUser>) => {
+    io.to(`${roomId}`).emit("people", [
+      { id: "-1", name: "Everyone", blocked: [] },
+      ...Array.from(users.values()).map((user) => ({
+        ...user,
+        blocked: Array.from(user.blocked)
+      }))
+    ]);
+  };
+
+  const saveChatMessage = async (
+    chatRoom: ChatRoom,
+    {
+      sender,
+      message,
+      dateTime,
+      receiver,
+      privateMessage = false
+    }: {
+      sender: string;
+      message: string;
+      dateTime: Date;
+      receiver?: string;
+      privateMessage?: boolean;
+    }
+  ) => {
+    const chatMessage = new ChatMessage();
+
+    chatMessage.sender = sender;
+    chatMessage.message = message;
+    chatMessage.dateTime = dateTime;
+
+    if (receiver) {
+      chatMessage.receiver = receiver;
+    }
+
+    chatMessage.private = privateMessage;
+
+    chatMessage.room = chatRoom;
+
+    return service.saveMessage(chatMessage);
+  };
+
+  const INACTIVITY_TIMEOUT = 90000;
+  const CHECK_INTERVAL = 30000;
+
+  const purgeInterval = setInterval(async () => {
+    for (const [roomId, users] of CHAT_ROOMS.allRooms) {
+      for (const [userId, user] of users) {
+        if (
+          differenceInMilliseconds(new Date(), user.lastSeen) >
+          INACTIVITY_TIMEOUT
+        ) {
+          users.delete(userId);
+
+          if (users.size === 0) {
+            CHAT_ROOMS.deleteRoom(roomId);
+          }
+
+          emitPeople(roomId, users);
+
+          const dateTime = new Date();
+
+          const chatRoom = (await service.findById(roomId)) as ChatRoom;
+
+          const savedChatMessage = await saveChatMessage(chatRoom, {
+            sender: "CHAT",
+            message: `${user.name} exited the room...`,
+            dateTime
+          });
+
+          io.to(`${roomId}`).emit("message", {
+            id: savedChatMessage.id,
+            sender: "Chat",
+            message: `${user.name} exited the room...`,
+            dateTime: formatISO(dateTime)
+          });
+        }
+      }
+    }
+  }, CHECK_INTERVAL);
+
+  const shutdown = () => {
+    clearInterval(purgeInterval);
+    process.exit(0);
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
   io.on("connection", (socket) => {
-    let userName = "";
-    let currentRoomId = -1;
-
-    const emitPeople = (users: Map<string, ChatUser>) => {
-      io.to(`${currentRoomId}`).emit("people", [
-        { id: "-1", name: "Everyone", blocked: [] },
-        ...Array.from(users.values()).map((user) => ({
-          ...user,
-          blocked: Array.from(user.blocked)
-        }))
-      ]);
-    };
-
-    const saveChatRoom = async (
-      chatRoom: ChatRoom,
-      {
-        sender,
-        message,
-        dateTime,
-        receiver,
-        privateMessage = false
-      }: {
-        sender: string;
-        message: string;
-        dateTime: Date;
-        receiver?: string;
-        privateMessage?: boolean;
-      }
-    ) => {
-      const chatMessage = new ChatMessage();
-
-      chatMessage.sender = sender;
-      chatMessage.message = message;
-      chatMessage.dateTime = dateTime;
-
-      if (receiver) {
-        chatMessage.receiver = receiver;
-      }
-
-      chatMessage.private = privateMessage;
-
-      chatRoom.messages.add(chatMessage);
-      await service.save(chatRoom);
-    };
-
-    socket.on("join", async ({ roomId, name }, callback) => {
-      const result = joinSchema.safeParse({ roomId, name });
+    socket.on("join", async ({ roomId, name, uuid }, callback) => {
+      const result = joinSchema.safeParse({ roomId, name, uuid });
 
       if (!result.success) {
         return callback({ error: "Invalid input!" });
@@ -85,45 +143,136 @@ export const initChat = (io: Server) => {
         return callback({ error: "Invalid room!" });
       }
 
-      userName = name;
-      currentRoomId = roomId;
-
       socket.join(`${roomId}`);
 
       const users = CHAT_ROOMS.getUsers(roomId);
 
-      if (users.has(name)) {
+      if (
+        Array.from(users.values()).some(
+          (user) => user.name === name && user.uuid !== uuid
+        )
+      ) {
         callback({ error: "User already exists!" });
         return socket.disconnect();
       }
 
-      users.set(name, { id: socket.id, name, blocked: new Set<string>() });
+      let user: ChatUser | undefined;
+
+      if (uuid) {
+        user = CHAT_ROOMS.getUserByUuid(roomId, uuid);
+      }
+
+      if (user) {
+        const messages = await service.getMessages(
+          roomId,
+          user.name,
+          user.joined
+        );
+
+        io.to(socket.id).emit(
+          "message",
+          messages.map((m) => ({
+            id: m.id,
+            sender: m.sender === "CHAT" ? "Chat" : m.sender,
+            message: m.message,
+            dateTime: formatISO(m.dateTime),
+            receiver: m.receiver,
+            private: m.private
+          }))
+        );
+      } else {
+        const dateTime = new Date();
+
+        const savedChatMessage = await saveChatMessage(chatRoom, {
+          sender: "CHAT",
+          message: `${name} entered the room...`,
+          dateTime: dateTime
+        });
+
+        io.to(`${roomId}`).emit("message", {
+          id: savedChatMessage.id,
+          sender: "Chat",
+          message: `${name} entered the room...`,
+          dateTime: formatISO(dateTime)
+        });
+      }
+
+      const newUuid = uuid ?? uuidv7();
+      const newDate = new Date();
+
+      if (user) {
+        user.id = socket.id;
+        user.name = name;
+        user.uuid = newUuid;
+        user.lastSeen = newDate;
+
+        users.set(name, {
+          id: socket.id,
+          name,
+          blocked: user.blocked,
+          uuid: newUuid,
+          joined: user.joined,
+          lastSeen: newDate
+        });
+      } else {
+        users.set(name, {
+          id: socket.id,
+          name,
+          blocked: new Set<string>(),
+          uuid: newUuid,
+          joined: newDate,
+          lastSeen: newDate
+        });
+      }
+
       CHAT_ROOMS.addRoom(roomId, users);
 
-      emitPeople(users);
+      emitPeople(roomId, users);
 
-      const dateTime = new Date();
-
-      io.to(`${roomId}`).emit("message", {
-        sender: "Chat",
-        message: `${name} entered the room...`,
-        dateTime: formatISO(dateTime)
-      });
-
-      await saveChatRoom(chatRoom, {
-        sender: "CHAT",
-        message: `${name} entered the room...`,
-        dateTime: dateTime
-      });
-
-      io.to(socket.id).emit("updateUser", { id: socket.id, name, blocked: [] });
+      if (user) {
+        io.to(socket.id).emit("updateUser", {
+          id: user.id,
+          name: user.name,
+          blocked: Array.from(user.blocked),
+          uuid: user.uuid
+        });
+      } else {
+        io.to(socket.id).emit("updateUser", {
+          id: socket.id,
+          name,
+          blocked: [],
+          uuid: newUuid
+        });
+      }
 
       callback();
     });
 
+    socket.on("heartbeat", ({ roomId, name }, callback) => {
+      const result = heartbeatSchema.safeParse({ roomId, name });
+
+      if (!result.success) {
+        return callback({ error: "Invalid input!" });
+      }
+
+      const users = CHAT_ROOMS.getUsers(roomId);
+
+      if (!users) {
+        return;
+      }
+
+      const user = users.get(name);
+
+      if (!user) {
+        return;
+      }
+
+      user.lastSeen = new Date();
+    });
+
     socket.on(
       "message",
-      async ({ name, message, privateMessage, target }, callback) => {
+      async ({ name, roomId, message, privateMessage, target }, callback) => {
         const result = messageSchema.safeParse({
           name,
           message,
@@ -135,13 +284,13 @@ export const initChat = (io: Server) => {
           return callback({ error: "Invalid input!" });
         }
 
-        const chatRoom = await service.findById(currentRoomId);
+        const chatRoom = await service.findById(roomId);
 
         if (!chatRoom) {
           return callback({ error: "Invalid room!" });
         }
 
-        const users = CHAT_ROOMS.getUsers(currentRoomId);
+        const users = CHAT_ROOMS.getUsers(roomId);
 
         if (!users) {
           return;
@@ -159,20 +308,21 @@ export const initChat = (io: Server) => {
         const dateTimeString = formatISO(dateTime);
 
         if (privateMessage && recipient) {
-          io.to(sender.id).emit("message", {
-            sender: sender.name,
-            message: message,
-            dateTime: dateTimeString,
-            receiver: recipient.name,
-            private: true
-          });
-
-          await saveChatRoom(chatRoom, {
+          const savedChatMessage = await saveChatMessage(chatRoom, {
             sender: sender.name,
             message,
             dateTime,
             receiver: recipient.name,
             privateMessage: true
+          });
+
+          io.to(sender.id).emit("message", {
+            id: savedChatMessage.id,
+            sender: sender.name,
+            message: message,
+            dateTime: dateTimeString,
+            receiver: recipient.name,
+            private: true
           });
 
           if (
@@ -183,6 +333,7 @@ export const initChat = (io: Server) => {
           }
 
           io.to(recipient.id).emit("message", {
+            id: savedChatMessage.id,
             sender: sender.name,
             message: message,
             dateTime: dateTimeString,
@@ -190,17 +341,18 @@ export const initChat = (io: Server) => {
             private: true
           });
         } else {
-          io.to(sender.id).emit("message", {
-            sender: sender.name,
-            message,
-            dateTime: dateTimeString,
-            receiver: target
-          });
-
-          await saveChatRoom(chatRoom, {
+          const savedChatMessage = await saveChatMessage(chatRoom, {
             sender: sender.name,
             message,
             dateTime,
+            receiver: target
+          });
+
+          io.to(sender.id).emit("message", {
+            id: savedChatMessage.id,
+            sender: sender.name,
+            message,
+            dateTime: dateTimeString,
             receiver: target
           });
 
@@ -228,6 +380,7 @@ export const initChat = (io: Server) => {
             }
 
             io.to(user.id).emit("message", {
+              id: savedChatMessage.id,
               sender: sender.name,
               message,
               dateTime: dateTimeString,
@@ -238,14 +391,14 @@ export const initChat = (io: Server) => {
       }
     );
 
-    socket.on("block", ({ name, target }, callback) => {
+    socket.on("block", ({ roomId, name, target }, callback) => {
       const result = blockSchema.safeParse({ name, target });
 
       if (!result.success) {
         return callback({ error: "Invalid input!" });
       }
 
-      const users = CHAT_ROOMS.getUsers(currentRoomId);
+      const users = CHAT_ROOMS.getUsers(roomId);
 
       if (!users) {
         return;
@@ -270,59 +423,64 @@ export const initChat = (io: Server) => {
       }
 
       io.to(user.id).emit("updateUser", {
-        ...user,
-        blocked: Array.from(user.blocked)
+        id: user.id,
+        name: user.name,
+        blocked: Array.from(user.blocked),
+        uuid: user.uuid
       });
 
-      emitPeople(users);
+      emitPeople(roomId, users);
     });
 
-    socket.on("disconnect", async () => {
-      const chatRoom = await service.findById(currentRoomId);
+    socket.on("logout", async ({ roomId, name }, callback) => {
+      const result = logoutSchema.safeParse({ roomId, name });
+
+      if (!result.success) {
+        return callback({ error: "Invalid input!" });
+      }
+
+      const chatRoom = await service.findById(roomId);
 
       if (!chatRoom) {
         return;
       }
 
-      if (currentRoomId === -1) {
-        return;
-      }
-
-      const users = CHAT_ROOMS.getUsers(currentRoomId);
+      const users = CHAT_ROOMS.getUsers(roomId);
 
       if (!users) {
         return;
       }
 
-      const user = Array.from(users.values()).find(
-        (user) => user.id === socket.id
-      );
+      const user = users.get(name);
 
       if (!user) {
         return;
       }
 
-      users.delete(user.name);
+      users.delete(name);
 
       if (users.size === 0) {
-        CHAT_ROOMS.deleteRoom(currentRoomId);
+        CHAT_ROOMS.deleteRoom(roomId);
       }
 
-      emitPeople(users);
+      emitPeople(roomId, users);
 
       const dateTime = new Date();
 
-      io.to(`${currentRoomId}`).emit("message", {
+      const savedChatMessage = await saveChatMessage(chatRoom, {
+        sender: "CHAT",
+        message: `${name} exited the room...`,
+        dateTime
+      });
+
+      io.to(`${roomId}`).emit("message", {
+        id: savedChatMessage.id,
         sender: "Chat",
-        message: `${userName} exited the room...`,
+        message: `${name} exited the room...`,
         dateTime: formatISO(dateTime)
       });
 
-      await saveChatRoom(chatRoom, {
-        sender: "CHAT",
-        message: `${userName} exited the room...`,
-        dateTime
-      });
+      callback();
     });
   });
 };

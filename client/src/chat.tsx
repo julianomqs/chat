@@ -27,16 +27,19 @@ interface ChatUser {
   id: string;
   name: string;
   blocked: string[];
+  uuid?: string;
 }
 
 const Sidebar = ({
   value,
   onChange,
-  user
+  user,
+  chatRoom
 }: {
   value: ChatUser;
   onChange: (value: ChatUser) => void;
   user?: ChatUser;
+  chatRoom?: ChatRoom;
 }) => {
   const toastRef = useToast();
 
@@ -101,9 +104,12 @@ const Sidebar = ({
           if (value) {
             socket.emit(
               "block",
-              { name: user?.name, target: value.name },
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              (response: any) => {
+              {
+                roomId: chatRoom?.id,
+                name: user?.name,
+                target: value.name
+              },
+              (response: { error?: string }) => {
                 if (response?.error) {
                   toastRef?.current?.show?.({
                     severity: "error",
@@ -122,6 +128,7 @@ const Sidebar = ({
 };
 
 interface ChatMessage {
+  id: number;
   sender: string;
   receiver?: string;
   message: string;
@@ -133,8 +140,16 @@ const Messages = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
   useEffect(() => {
-    const handleMessages = (message: ChatMessage) => {
-      setMessages((prev) => [...prev, message]);
+    const handleMessages = (message: ChatMessage | ChatMessage[]) => {
+      setMessages((prev) => {
+        const newMessages = Array.isArray(message) ? message : [message];
+        const existingIds = new Set(prev.map((m) => m.id));
+        const filteredMessages = newMessages.filter(
+          (m) => !existingIds.has(m.id)
+        );
+
+        return [...prev, ...filteredMessages];
+      });
     };
 
     socket.on("message", handleMessages);
@@ -198,12 +213,12 @@ const Footer = ({
       "message",
       {
         name: user?.name,
+        roomId: chatRoom?.id,
         message,
         privateMessage: target?.name === "Everyone" ? false : privateMessage,
         target: target?.name === "Everyone" ? undefined : target?.name
       },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (response: any) => {
+      (response: { error?: string }) => {
         if (response?.error) {
           toastRef?.current?.show?.({
             severity: "error",
@@ -259,8 +274,26 @@ const Footer = ({
                 defaultFocus: "reject",
                 acceptClassName: "p-button-danger",
                 accept: () => {
-                  socket.disconnect();
-                  navigate("/");
+                  socket.emit(
+                    "logout",
+                    {
+                      roomId: chatRoom?.id,
+                      name: user?.name
+                    },
+                    (response: { error?: string }) => {
+                      if (response?.error) {
+                        toastRef?.current?.show?.({
+                          severity: "error",
+                          summary: "Error",
+                          detail: response.error,
+                          life: 5000
+                        });
+                      } else {
+                        localStorage.removeItem("user");
+                        navigate("/");
+                      }
+                    }
+                  );
                 }
               })
             }
@@ -316,9 +349,11 @@ const LoginDialog = ({
   const handleFormSubmit = async (data: FormData) => {
     socket.emit(
       "join",
-      { roomId: chatRoom?.id, name: data.name },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (response: any) => {
+      {
+        roomId: chatRoom?.id,
+        name: data.name
+      },
+      (response: { error?: string }) => {
         if (response?.error) {
           toastRef?.current?.show?.({
             severity: "error",
@@ -384,6 +419,8 @@ const LoginDialog = ({
 };
 
 const Chat = () => {
+  const toastRef = useToast();
+
   const params = useParams();
 
   const [user, setUser] = useState<ChatUser>();
@@ -410,13 +447,72 @@ const Chat = () => {
   }, [params.id]);
 
   useEffect(() => {
-    const handleUpdateUser = (user: ChatUser) => setUser(user);
+    const handleUpdateUser = (user: ChatUser) => {
+      localStorage.setItem(
+        "user",
+        JSON.stringify({
+          roomId: chatRoom?.id,
+          name: user.name,
+          uuid: user.uuid
+        })
+      );
+
+      setUser(user);
+    };
 
     socket.on("updateUser", handleUpdateUser);
 
     return () => {
       socket.off("updateUser", handleUpdateUser);
     };
+  }, [chatRoom?.id]);
+
+  useEffect(() => {
+    const user = localStorage.getItem("user");
+
+    if (user) {
+      const { roomId, name, uuid } = JSON.parse(user);
+
+      socket.emit(
+        "join",
+        {
+          roomId,
+          name,
+          uuid
+        },
+        (response: { error?: string }) => {
+          if (response?.error) {
+            if (response?.error) {
+              toastRef?.current?.show?.({
+                severity: "error",
+                summary: "Error",
+                detail: response.error,
+                life: 5000
+              });
+            }
+          } else {
+            setVisible(false);
+          }
+        }
+      );
+    }
+  }, [toastRef]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const user = localStorage.getItem("user");
+
+      if (socket.connected && user) {
+        const { roomId, name } = JSON.parse(user);
+
+        socket.emit("heartbeat", {
+          roomId,
+          name
+        });
+      }
+    }, 30000);
+
+    return () => clearInterval(interval);
   }, []);
 
   return (
@@ -439,6 +535,7 @@ const Chat = () => {
               value={target}
               onChange={(target) => setTarget(target)}
               user={user}
+              chatRoom={chatRoom}
             />
             <Messages />
           </div>
