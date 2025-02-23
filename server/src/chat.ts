@@ -147,11 +147,13 @@ export const initChat = (io: Server) => {
 
       const users = CHAT_ROOMS.getUsers(roomId);
 
-      if (
-        Array.from(users.values()).some(
-          (user) => user.name === name && user.uuid !== uuid
-        )
-      ) {
+      const userExists = uuid
+        ? Array.from(users.values()).some(
+            (user) => user.name === name && user.uuid !== uuid
+          )
+        : users.has(name);
+
+      if (userExists) {
         callback({ error: "User already exists!" });
         return socket.disconnect();
       }
