@@ -251,7 +251,7 @@ const Messages = () => {
         }
 
         return (
-          <div className="flex flex-column gap-2 mb-2" key={idx}>
+          <div className="flex flex-column gap-2 mb-2" key={m.id}>
             <div className="flex">
               <div className="font-bold">{title}</div>
               <div className="ml-auto text-sm">
