@@ -186,21 +186,6 @@ export const initChat = (io: Server) => {
             color: m.sender === "CHAT" ? undefined : user.color
           }))
         );
-      } else {
-        const dateTime = new Date();
-
-        const savedChatMessage = await saveChatMessage(chatRoom, {
-          sender: "CHAT",
-          message: `${name} entered the room...`,
-          dateTime: dateTime
-        });
-
-        io.to(`${roomId}`).emit("message", {
-          id: savedChatMessage.id,
-          sender: "Chat",
-          message: `${name} entered the room...`,
-          dateTime: formatISO(dateTime)
-        });
       }
 
       const newUuid = uuid ?? uuidv7();
@@ -230,6 +215,21 @@ export const initChat = (io: Server) => {
           joined: newDate,
           lastSeen: newDate,
           color
+        });
+
+        const dateTime = new Date();
+
+        const savedChatMessage = await saveChatMessage(chatRoom, {
+          sender: "CHAT",
+          message: `${name} entered the room...`,
+          dateTime: dateTime
+        });
+
+        io.to(`${roomId}`).emit("message", {
+          id: savedChatMessage.id,
+          sender: "Chat",
+          message: `${name} entered the room...`,
+          dateTime: formatISO(dateTime)
         });
       }
 

@@ -13,7 +13,7 @@ export class ChatRoom {
   @PrimaryKey()
   id!: number;
 
-  @Property()
+  @Property({ type: "Date", columnType: "DATETIME(3)" })
   createdAt: Date = new Date();
 
   @Property({ length: 50 })

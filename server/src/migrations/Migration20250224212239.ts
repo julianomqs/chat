@@ -1,13 +1,13 @@
 import { Migration } from "@mikro-orm/migrations";
 
-export class Migration20250220215047 extends Migration {
+export class Migration20250224212239 extends Migration {
   override async up(): Promise<void> {
     this.addSql(
-      `create table \`chat_room\` (\`id\` int unsigned not null auto_increment primary key, \`created_at\` datetime not null, \`name\` varchar(50) not null) default character set utf8mb4 engine = InnoDB;`
+      `create table \`chat_room\` (\`id\` int unsigned not null auto_increment primary key, \`created_at\` DATETIME(3) not null, \`name\` varchar(50) not null) default character set utf8mb4 engine = InnoDB;`
     );
 
     this.addSql(
-      `create table \`chat_message\` (\`id\` int unsigned not null auto_increment primary key, \`date_time\` datetime not null, \`message\` varchar(500) not null, \`sender\` varchar(20) not null, \`receiver\` varchar(20) null, \`private\` tinyint(1) not null, \`room_id\` int unsigned not null) default character set utf8mb4 engine = InnoDB;`
+      `create table \`chat_message\` (\`id\` int unsigned not null auto_increment primary key, \`date_time\` DATETIME(3) not null, \`message\` varchar(500) not null, \`sender\` varchar(20) not null, \`receiver\` varchar(20) null, \`private\` tinyint(1) not null default false, \`room_id\` int unsigned not null) default character set utf8mb4 engine = InnoDB;`
     );
     this.addSql(
       `alter table \`chat_message\` add index \`chat_message_room_id_index\`(\`room_id\`);`

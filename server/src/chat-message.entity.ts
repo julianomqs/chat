@@ -6,7 +6,7 @@ export class ChatMessage {
   @PrimaryKey()
   id!: number;
 
-  @Property()
+  @Property({ type: "Date", columnType: "DATETIME(3)" })
   dateTime!: Date;
 
   @Property({ length: 500 })
