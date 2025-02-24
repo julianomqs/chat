@@ -166,13 +166,15 @@ const Messages = () => {
 
   const isMediaURL = (text: string) => {
     const imageRegex = /\.(jpeg|jpg|gif|png|webp)$/i;
-    const videoRegex = /\.(mp4|webm|ogg)$/i;
+    const videoRegex = /\.(mp4|webm|ogv)$/i;
+    const audioRegex = /\.(mp3|wav|ogg|m4a)$/i;
 
     const isYouTube = isYouTubeURL(text);
 
     return {
       isImage: imageRegex.test(text) && !isYouTube,
-      isVideo: videoRegex.test(text) && !isYouTube
+      isVideo: videoRegex.test(text) && !isYouTube,
+      isAudio: audioRegex.test(text) && !isYouTube
     };
   };
 
@@ -291,8 +293,14 @@ const Messages = () => {
                           <source src={m.message} />
                         </video>
                       )}
+                      {isMediaURL(m.message).isAudio && (
+                        <audio controls style={{ width: "100%" }}>
+                          <source src={m.message} />
+                        </audio>
+                      )}
                       {!isMediaURL(m.message).isImage &&
-                        !isMediaURL(m.message).isVideo && (
+                        !isMediaURL(m.message).isVideo &&
+                        !isMediaURL(m.message).isAudio && (
                           <a
                             href={m.message}
                             target="_blank"
