@@ -40,10 +40,39 @@ const App = () => (
         div#root {
           height: 100%;
           width: 100%;
+          overflow: hidden;
         }
 
         .p-card .p-card-content {
           padding: 0;
+        }
+
+        img,
+        video {
+          border-radius: 8px;
+          object-fit: cover;
+        }
+
+        .youtube-container {
+          position: relative;
+          width: 100%;
+          max-width: 560px;
+        }
+
+        .youtube-container::before {
+          content: "";
+          display: block;
+          padding-bottom: 56.25%;
+        }
+
+        .youtube-container iframe {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          border-radius: 8px;
+          border: none;
         }
       `}
     />

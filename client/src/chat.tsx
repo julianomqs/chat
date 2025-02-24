@@ -1,7 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { format, parseISO } from "date-fns";
 import { Button } from "primereact/button";
-import { Card } from "primereact/card";
 import { Checkbox } from "primereact/checkbox";
 import { ColorPicker } from "primereact/colorpicker";
 import { confirmDialog } from "primereact/confirmdialog";
@@ -70,7 +69,7 @@ const Sidebar = ({
   const userBlockedSet = new Set(user?.blocked || []);
 
   return (
-    <div className="flex flex-column gap-2">
+    <div className="h-full flex flex-column gap-2">
       <ListBox
         className="flex-1"
         css={{ minWidth: "250px" }}
@@ -165,8 +164,46 @@ const Messages = () => {
     };
   }, []);
 
+  const isMediaURL = (text: string) => {
+    const imageRegex = /\.(jpeg|jpg|gif|png|webp)$/i;
+    const videoRegex = /\.(mp4|webm|ogg)$/i;
+
+    const isYouTube = isYouTubeURL(text);
+
+    return {
+      isImage: imageRegex.test(text) && !isYouTube,
+      isVideo: videoRegex.test(text) && !isYouTube
+    };
+  };
+
+  const isYouTubeURL = (url: string) => {
+    try {
+      const parsed = new URL(url);
+      return (
+        parsed.hostname.includes("youtube.com") ||
+        parsed.hostname.includes("youtu.be")
+      );
+    } catch {
+      return false;
+    }
+  };
+
+  const getYouTubeId = (url: string) => {
+    const regExp =
+      /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+    const match = url.match(regExp);
+    return match && match[2].length === 11 ? match[2] : null;
+  };
+
   return (
-    <Card className="flex-1 overflow-y-auto">
+    <div
+      className="h-full flex flex-column flex-1 overflow-y-auto"
+      css={{
+        border: "1px solid #dee2e6",
+        borderRadius: "4px",
+        padding: "20px"
+      }}
+    >
       {messages.map((m, idx) => {
         let title = null;
 
@@ -220,13 +257,63 @@ const Messages = () => {
               </div>
             </div>
 
-            <div>{m.message}</div>
+            <div>
+              {m.message.startsWith("http") ? (
+                <>
+                  {isYouTubeURL(m.message) ? (
+                    <div className="youtube-container">
+                      <iframe
+                        width="100%"
+                        height="315"
+                        src={`https://www.youtube-nocookie.com/embed/${getYouTubeId(
+                          m.message
+                        )}?modestbranding=1&rel=0`}
+                        frameBorder="0"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                        title="YouTube video player"
+                      />
+                    </div>
+                  ) : (
+                    <>
+                      {isMediaURL(m.message).isImage && (
+                        <img
+                          src={m.message}
+                          alt="Content"
+                          style={{ maxWidth: "100%", maxHeight: "200px" }}
+                        />
+                      )}
+                      {isMediaURL(m.message).isVideo && (
+                        <video
+                          controls
+                          style={{ maxWidth: "100%", maxHeight: "200px" }}
+                        >
+                          <source src={m.message} />
+                        </video>
+                      )}
+                      {!isMediaURL(m.message).isImage &&
+                        !isMediaURL(m.message).isVideo && (
+                          <a
+                            href={m.message}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {m.message}
+                          </a>
+                        )}
+                    </>
+                  )}
+                </>
+              ) : (
+                <div>{m.message}</div>
+              )}
+            </div>
 
             <div css={{ borderBottom: "1px solid #ced4da" }}></div>
           </div>
         );
       })}
-    </Card>
+    </div>
   );
 };
 
@@ -272,7 +359,7 @@ const Footer = ({
   };
 
   return (
-    <footer className="flex gap-2 flex-column">
+    <footer className="flex flex-column gap-2">
       <div className="flex align-items-center gap-2">
         <InputText
           className="flex-1 w-full"
@@ -598,18 +685,18 @@ const Chat = () => {
     <>
       <Panel
         header={chatRoom?.name}
-        className="h-full"
+        className="h-full flex flex-column"
         pt={{
           content: {
-            className: "h-full"
+            className: "h-full flex flex-column"
           },
           toggleableContent: {
             style: { height: "calc(100% - 50px)" }
           }
         }}
       >
-        <div className="flex flex-column h-full gap-2">
-          <div className="flex flex-1 gap-2">
+        <div className="h-full flex flex-column gap-2">
+          <div className="h-full flex flex-1 gap-2 overflow-hidden">
             <Sidebar
               value={target}
               onChange={(target) => setTarget(target)}
