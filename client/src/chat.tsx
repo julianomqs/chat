@@ -206,7 +206,7 @@ const Messages = () => {
         padding: "20px"
       }}
     >
-      {messages.map((m, idx) => {
+      {messages.map((m) => {
         let title = null;
 
         if (m.private === true) {
