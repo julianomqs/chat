@@ -164,6 +164,15 @@ const Messages = () => {
     };
   }, []);
 
+  const isValidURL = (text: string) => {
+    try {
+      new URL(text);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const isMediaURL = (text: string) => {
     const imageRegex = /\.(jpeg|jpg|gif|png|webp)$/i;
     const videoRegex = /\.(mp4|webm|ogv)$/i;
@@ -181,6 +190,7 @@ const Messages = () => {
   const isYouTubeURL = (url: string) => {
     try {
       const parsed = new URL(url);
+
       return (
         parsed.hostname.includes("youtube.com") ||
         parsed.hostname.includes("youtu.be")
@@ -260,7 +270,7 @@ const Messages = () => {
             </div>
 
             <div>
-              {m.message.startsWith("http") ? (
+              {isValidURL(m.message) ? (
                 <>
                   {isYouTubeURL(m.message) ? (
                     <div className="youtube-container">
