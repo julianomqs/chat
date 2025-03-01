@@ -7,7 +7,7 @@ import { confirmDialog } from "primereact/confirmdialog";
 import { DataTable } from "primereact/datatable";
 import { InputText } from "primereact/inputtext";
 import { Panel } from "primereact/panel";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { useNavigate } from "react-router";
 import { useDebouncedCallback } from "use-debounce";
@@ -169,36 +169,34 @@ const Table = ({
 const ChatRooms = () => {
   const navigate = useNavigate();
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
-  const [loading, setLoading] = useState(false);
   const toastRef = useToast();
+  const [isPending, startTransition] = useTransition();
 
-  useEffect(() => {
-    const loadInitialData = async () => {
+  const loadInitialData = () => {
+    startTransition(async () => {
       try {
-        setLoading(true);
         const data = await service.findAll();
         setChatRooms(data);
       } catch {
         showError("Failed to load chat rooms");
-      } finally {
-        setLoading(false);
       }
-    };
+    });
+  };
 
+  useEffect(() => {
     loadInitialData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleSearch = async (filter?: { name: string }) => {
-    try {
-      setLoading(true);
-      const data = await service.findAll(filter?.name);
-      setChatRooms(data);
-    } catch {
-      showError("Failed to search chat rooms");
-    } finally {
-      setLoading(false);
-    }
+  const handleSearch = (filter?: { name: string }) => {
+    startTransition(async () => {
+      try {
+        const data = await service.findAll(filter?.name);
+        setChatRooms(data);
+      } catch {
+        showError("Failed to search chat rooms");
+      }
+    });
   };
 
   const showError = (message: string) => {
@@ -223,7 +221,7 @@ const ChatRooms = () => {
 
         <SearchForm onChange={handleSearch} />
 
-        <Table value={chatRooms} loading={loading} onChange={handleSearch} />
+        <Table value={chatRooms} loading={isPending} onChange={handleSearch} />
       </div>
     </Panel>
   );
