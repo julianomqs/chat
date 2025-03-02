@@ -1,17 +1,21 @@
 import { zodResolver } from "@hookform/resolvers/zod";
+import { BlockUI } from "primereact/blockui";
 import { Button } from "primereact/button";
 import { InputText } from "primereact/inputtext";
 import { Panel } from "primereact/panel";
-import { useEffect } from "react";
+import { useEffect, useTransition } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { useNavigate, useParams } from "react-router";
 import { z } from "zod";
 import { ChatRoomService } from "./chat-room-service";
 import { useToast } from "./toast-provider";
+import { ProgressSpinner } from "primereact/progressspinner";
 
 const service = new ChatRoomService();
 
 const Form = () => {
+  const [isPending, startTransition] = useTransition();
+
   const schema = z.object({
     name: z.string().max(50)
   });
@@ -32,16 +36,19 @@ const Form = () => {
 
   const params = useParams();
 
-  useEffect(() => {
-    const loadData = async () => {
+  const loadData = () => {
+    startTransition(async () => {
       if (params.id) {
         const data = await service.findById(parseInt(params.id));
         reset(data);
       }
-    };
+    });
+  };
 
+  useEffect(() => {
     loadData();
-  }, [params.id, reset]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.id]);
 
   const navigate = useNavigate();
 
@@ -85,42 +92,46 @@ const Form = () => {
   };
 
   return (
-    <form onSubmit={handleSubmit(handleFormSubmit)}>
-      <div className="grid">
-        <div className="col-12">
-          <label htmlFor="name" className="block mb-1">
-            Name
-          </label>
-          <Controller
-            name="name"
-            control={control}
-            render={({ field }) => (
-              <InputText
-                id="name"
-                type="text"
-                {...field}
-                className={
-                  errors.name ? "w-full mb-1 p-invalid" : "w-full mb-1"
-                }
-              />
-            )}
-          />
-          {errors.name && (
-            <small className="p-error">{errors.name.message}</small>
-          )}
-        </div>
-      </div>
+    <>
+      <BlockUI fullScreen blocked={isPending} template={<ProgressSpinner />} />
 
-      <div className="grid">
-        <div className="col-12">
-          <Button
-            label={params.id ? "Update" : "Create"}
-            type="submit"
-            loading={isSubmitting}
-          />
+      <form onSubmit={handleSubmit(handleFormSubmit)}>
+        <div className="grid">
+          <div className="col-12">
+            <label htmlFor="name" className="block mb-1">
+              Name
+            </label>
+            <Controller
+              name="name"
+              control={control}
+              render={({ field }) => (
+                <InputText
+                  id="name"
+                  type="text"
+                  {...field}
+                  className={
+                    errors.name ? "w-full mb-1 p-invalid" : "w-full mb-1"
+                  }
+                />
+              )}
+            />
+            {errors.name && (
+              <small className="p-error">{errors.name.message}</small>
+            )}
+          </div>
         </div>
-      </div>
-    </form>
+
+        <div className="grid">
+          <div className="col-12">
+            <Button
+              label={params.id ? "Update" : "Create"}
+              type="submit"
+              loading={isSubmitting}
+            />
+          </div>
+        </div>
+      </form>
+    </>
   );
 };
 

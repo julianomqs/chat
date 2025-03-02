@@ -1,5 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { format } from "date-fns";
+import { BlockUI } from "primereact/blockui";
 import { Button } from "primereact/button";
 import { Card } from "primereact/card";
 import { Column } from "primereact/column";
@@ -7,6 +8,7 @@ import { confirmDialog } from "primereact/confirmdialog";
 import { DataTable } from "primereact/datatable";
 import { InputText } from "primereact/inputtext";
 import { Panel } from "primereact/panel";
+import { ProgressSpinner } from "primereact/progressspinner";
 import { useEffect, useState, useTransition } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { useNavigate } from "react-router";
@@ -82,12 +84,10 @@ const SearchForm = ({
 
 const Table = ({
   value,
-  onChange,
-  loading
+  onChange
 }: {
   value: ChatRoom[];
   onChange: () => void;
-  loading: boolean;
 }) => {
   const navigate = useNavigate();
 
@@ -107,7 +107,6 @@ const Table = ({
       value={value}
       paginator
       rows={10}
-      loading={loading}
       emptyMessage="No chat rooms found"
     >
       <Column
@@ -209,21 +208,25 @@ const ChatRooms = () => {
   };
 
   return (
-    <Panel header="Chat Rooms">
-      <div className="flex flex-column gap-3">
-        <Button
-          label="New Chat Room"
-          onClick={() => navigate("/chatroom")}
-          className="align-self-start"
-          icon="pi pi-plus"
-          aria-label="Create new chat room"
-        />
+    <>
+      <BlockUI fullScreen blocked={isPending} template={<ProgressSpinner />} />
 
-        <SearchForm onChange={handleSearch} />
+      <Panel header="Chat Rooms">
+        <div className="flex flex-column gap-3">
+          <Button
+            label="New Chat Room"
+            onClick={() => navigate("/chatroom")}
+            className="align-self-start"
+            icon="pi pi-plus"
+            aria-label="Create new chat room"
+          />
 
-        <Table value={chatRooms} loading={isPending} onChange={handleSearch} />
-      </div>
-    </Panel>
+          <SearchForm onChange={handleSearch} />
+
+          <Table value={chatRooms} onChange={handleSearch} />
+        </div>
+      </Panel>
+    </>
   );
 };
 
