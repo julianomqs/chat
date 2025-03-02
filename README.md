@@ -2,6 +2,16 @@
 
 Chat example.
 
+## Features
+
+- Image messages (jpeg, jpg, gif, png, webp)
+- Video messages (YouTube, mp4, webm, ogv)
+- Audio messages (mp3, wav, ogg, m4a)
+- Private messages
+- Message deletion
+- Block users
+- Colored nicknames
+
 ## Steps to run the project
 
 1. Install prerequisites;
