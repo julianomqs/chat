@@ -56,4 +56,8 @@ export class ChatRoomService {
       ]
     });
   };
+
+  findMessageById(id: number) {
+    return this.em.findOne(ChatMessage, id);
+  }
 }

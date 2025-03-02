@@ -21,6 +21,9 @@ export class ChatMessage {
   @Property()
   private: boolean = false;
 
+  @Property()
+  deleted: boolean = false;
+
   @ManyToOne()
   room!: ChatRoom;
 }

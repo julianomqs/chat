@@ -28,6 +28,11 @@ const messageSchema = z.object({
   target: z.string().min(1).max(20).optional()
 });
 
+const deleteSchema = z.object({
+  roomId: z.number().positive(),
+  messageId: z.number().positive()
+});
+
 const blockSchema = z.object({
   name: z.string().min(1).max(20),
   target: z.string().min(1).max(20)
@@ -183,7 +188,8 @@ export const initChat = (io: Server) => {
             dateTime: formatISO(m.dateTime),
             receiver: m.receiver,
             private: m.private,
-            color: m.sender === "CHAT" ? undefined : user.color
+            color: m.sender === "CHAT" ? undefined : user.color,
+            deleted: m.deleted
           }))
         );
       }
@@ -402,6 +408,30 @@ export const initChat = (io: Server) => {
         }
       }
     );
+
+    socket.on("deleteMessage", async ({ roomId, messageId }, callback) => {
+      const result = deleteSchema.safeParse({ roomId, messageId });
+
+      if (!result.success) {
+        return callback({ error: "Invalid input!" });
+      }
+
+      try {
+        const message = await service.findMessageById(messageId);
+
+        if (!message || message.room.id !== roomId) {
+          return callback({ error: "Message not found!" });
+        }
+
+        message.deleted = true;
+        await service.saveMessage(message);
+
+        io.to(`${roomId}`).emit("messageDeleted", { id: messageId });
+        callback();
+      } catch (error) {
+        callback({ error: "Failed to delete message" });
+      }
+    });
 
     socket.on("block", ({ roomId, name, target }, callback) => {
       const result = blockSchema.safeParse({ name, target });

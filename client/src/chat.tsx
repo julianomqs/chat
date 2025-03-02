@@ -39,6 +39,7 @@ interface ChatMessage {
   dateTime: string;
   private?: boolean;
   color?: string;
+  deleted?: boolean;
 }
 
 const Sidebar = ({
@@ -141,7 +142,15 @@ const Sidebar = ({
   );
 };
 
-const Messages = () => {
+const Messages = ({
+  chatRoom,
+  user
+}: {
+  chatRoom?: ChatRoom;
+  user?: ChatUser;
+}) => {
+  const toastRef = useToast();
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
   useEffect(() => {
@@ -157,10 +166,18 @@ const Messages = () => {
       });
     };
 
+    const handleMessageDeleted = ({ id }: { id: number }) => {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, deleted: true } : m))
+      );
+    };
+
     socket.on("message", handleMessages);
+    socket.on("messageDeleted", handleMessageDeleted);
 
     return () => {
       socket.off("message", handleMessages);
+      socket.off("messageDeleted", handleMessageDeleted);
     };
   }, []);
 
@@ -264,13 +281,45 @@ const Messages = () => {
           <div className="flex flex-column gap-2 mb-2" key={m.id}>
             <div className="flex">
               <div className="font-bold">{title}</div>
-              <div className="ml-auto text-sm">
+              <div className="ml-auto text-sm flex align-items-center gap-2">
                 {format(parseISO(m.dateTime), "dd/MM/yyyy HH:mm")}
+                {!m.deleted && user?.name === m.sender && (
+                  <Button
+                    icon="pi pi-trash"
+                    className="p-button-text p-button-sm"
+                    onClick={() =>
+                      confirmDialog({
+                        message:
+                          "Are you sure you want to delete this message?",
+                        header: "Delete Message",
+                        icon: "pi pi-exclamation-triangle",
+                        accept: () =>
+                          socket.emit(
+                            "deleteMessage",
+                            {
+                              roomId: chatRoom?.id,
+                              messageId: m.id
+                            },
+                            (response: { error?: string }) => {
+                              if (response?.error) {
+                                toastRef?.current?.show?.({
+                                  severity: "error",
+                                  summary: "Error",
+                                  detail: response.error,
+                                  life: 5000
+                                });
+                              }
+                            }
+                          )
+                      })
+                    }
+                  />
+                )}
               </div>
             </div>
 
             <div>
-              {isValidURL(m.message) ? (
+              {!m.deleted && isValidURL(m.message) ? (
                 <>
                   {isYouTubeURL(m.message) ? (
                     <div className="youtube-container">
@@ -322,6 +371,10 @@ const Messages = () => {
                     </>
                   )}
                 </>
+              ) : m.deleted ? (
+                <div css={{ color: "#6c757d", fontStyle: "italic" }}>
+                  Message deleted
+                </div>
               ) : (
                 <div>{m.message}</div>
               )}
@@ -721,7 +774,7 @@ const Chat = () => {
               user={user}
               chatRoom={chatRoom}
             />
-            <Messages />
+            <Messages chatRoom={chatRoom} user={user} />
           </div>
           <Footer chatRoom={chatRoom} user={user} target={target} />
         </div>

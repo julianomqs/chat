@@ -4,9 +4,12 @@
   "type": "module",
   "scripts": {
     "check-types": "tsc --noemit",
-    "start": "npx mikro-orm-esm migration:up && nodemon src/index.ts",
     "eslint": "eslint --cache --fix .",
-    "format": "prettier --write \"./**/*.{js,ts,json}\""
+    "format": "prettier --write \"./**/*.{js,ts,json}\"",
+    "migration:create": "npx mikro-orm-esm migration:create",
+    "migration:up": "npx mikro-orm-esm migration:up",
+    "migration:down": "npx mikro-orm-esm migration:down",
+    "start": "npx mikro-orm-esm migration:up && nodemon src/index.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.20.0",
