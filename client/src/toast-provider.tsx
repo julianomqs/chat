@@ -1,7 +1,6 @@
 import { Toast } from "primereact/toast";
-import { ReactNode, RefObject, createContext, useContext, useRef } from "react";
-
-const ToastContext = createContext<RefObject<Toast | null>>(null!);
+import { ReactNode, useRef } from "react";
+import { ToastContext } from "./use-toast";
 
 export const ToastProvider = ({
   children,
@@ -18,6 +17,3 @@ export const ToastProvider = ({
     </ToastContext.Provider>
   );
 };
-
-// eslint-disable-next-line react-refresh/only-export-components
-export const useToast = () => useContext(ToastContext);
