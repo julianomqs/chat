@@ -15,7 +15,7 @@ import { useNavigate } from "react-router";
 import { useDebouncedCallback } from "use-debounce";
 import { z } from "zod";
 import { ChatRoom, ChatRoomService } from "./chat-room-service";
-import { useToast } from "./toast-provider";
+import { useToast } from "./use-toast";
 
 const service = new ChatRoomService();
 

@@ -14,7 +14,7 @@ import { useNavigate, useParams } from "react-router";
 import { io } from "socket.io-client";
 import { z } from "zod";
 import { ChatRoom, ChatRoomService } from "./chat-room-service";
-import { useToast } from "./toast-provider";
+import { useToast } from "./use-toast";
 
 const service = new ChatRoomService();
 

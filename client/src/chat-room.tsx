@@ -3,13 +3,13 @@ import { BlockUI } from "primereact/blockui";
 import { Button } from "primereact/button";
 import { InputText } from "primereact/inputtext";
 import { Panel } from "primereact/panel";
+import { ProgressSpinner } from "primereact/progressspinner";
 import { useEffect, useTransition } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { useNavigate, useParams } from "react-router";
 import { z } from "zod";
 import { ChatRoomService } from "./chat-room-service";
-import { useToast } from "./toast-provider";
-import { ProgressSpinner } from "primereact/progressspinner";
+import { useToast } from "./use-toast";
 
 const service = new ChatRoomService();
 
