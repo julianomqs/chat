@@ -17,7 +17,14 @@ const Form = () => {
   const [isPending, startTransition] = useTransition();
 
   const schema = z.object({
-    name: z.string().max(50)
+    name: z
+      .string()
+      .max(50)
+      .superRefine((val, ctx) => {
+        if (val.trim().length === 0) {
+          ctx.addIssue({ code: "custom", message: "Required" });
+        }
+      })
   });
 
   type FormData = z.infer<typeof schema>;
@@ -109,9 +116,8 @@ const Form = () => {
                   id="name"
                   type="text"
                   {...field}
-                  className={
-                    errors.name ? "w-full mb-1 p-invalid" : "w-full mb-1"
-                  }
+                  className="w-full mb-1"
+                  invalid={Boolean(errors.name)}
                 />
               )}
             />
