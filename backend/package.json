@@ -1,0 +1,42 @@
+{
+  "name": "batepapo-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node dev.mjs",
+    "start:server": "tsx watch src/index.ts",
+    "typecheck:dev": "tsc -p tsconfig.dev.json --noEmit",
+    "typecheck:watch": "tsc -p tsconfig.dev.json --noEmit --watch --preserveWatchOutput",
+    "build": "tsc -p tsconfig.json",
+    "start:prod": "node dist/index.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run --config vitest.config.ts",
+    "test:coverage": "vitest run --coverage --config vitest.config.ts"
+  },
+  "dependencies": {
+    "express": "5.2.1",
+    "mongodb": "7.7.0",
+    "socket.io": "4.8.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/express": "5.0.6",
+    "@types/node": "24.19.1",
+    "eslint": "10.12.0",
+    "globals": "17.13.0",
+    "prettier": "3.9.9",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.0",
+    "vitest": "5.0.3",
+    "socket.io-client": "4.8.4",
+    "@vitest/coverage-v8": "5.0.3"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  }
+}
