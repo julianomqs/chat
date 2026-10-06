@@ -1014,4 +1014,412 @@ describe("chat Socket.io com MongoDB real", () => {
       ).toMatchObject({ ok: false });
     }
   });
+
+  const rawEmit = (client: TestSocket, event: string, ...args: unknown[]) => {
+    (client as unknown as { emit: (...rest: unknown[]) => void }).emit(
+      event,
+      ...args
+    );
+  };
+
+  const expectHealthy = async (): Promise<void> => {
+    const health = await fetch(`${baseUrl}/health`);
+
+    expect(health.status).toBe(200);
+  };
+
+  const restartWithFailures = async (
+    failOperations: Set<string>
+  ): Promise<void> => {
+    const db = new Proxy(mongo.db(testDbName), {
+      get(target, property) {
+        if (property === "collection") {
+          return (name: string) => {
+            const collection = target.collection(name);
+
+            return new Proxy(collection, {
+              get(targetCollection, method, receiver) {
+                if (
+                  typeof method === "string" &&
+                  failOperations.has(`${name}.${method}`)
+                ) {
+                  return () => {
+                    throw new Error(`Falha simulada em ${name}.${method}`);
+                  };
+                }
+
+                const value = Reflect.get(targetCollection, method, receiver);
+
+                return typeof value === "function"
+                  ? value.bind(targetCollection)
+                  : value;
+              }
+            });
+          };
+        }
+
+        const value = Reflect.get(target, property, target);
+
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+    });
+
+    await app.close();
+    app = await createChatServer(db, {
+      adminApiToken: "test-admin-token",
+      disconnectGraceMs: 10_000
+    });
+    await new Promise<void>((resolve) =>
+      app.httpServer.listen(0, "127.0.0.1", resolve)
+    );
+
+    const address = app.httpServer.address();
+
+    if (!address || typeof address === "string") {
+      throw new Error("Porta de teste indisponível.");
+    }
+
+    baseUrl = `http://127.0.0.1:${address.port}`;
+    clients = [];
+  };
+
+  it("sobrevive a payloads nulos e de tipos inválidos em todos os eventos", async () => {
+    const client = await connectClient();
+    const invalidPayloads = [null, undefined, 5, "texto"];
+
+    for (const payload of invalidPayloads) {
+      for (const event of [
+        "room:enter",
+        "room:spy",
+        "session:resume",
+        "chat:send"
+      ] as const) {
+        expect(await emitWithAck(client, event, payload)).toMatchObject({
+          ok: false
+        });
+      }
+    }
+
+    for (const payload of [{ recipient: 5 }, {}, null, "x"]) {
+      rawEmit(client, "chat:select-recipient", payload);
+    }
+
+    const user = await enterParticipant("Sobrevivente");
+
+    for (const payload of [{ recipient: 5 }, {}, null, "x"]) {
+      rawEmit(user.client, "chat:select-recipient", payload);
+    }
+
+    expect(await emitWithAck(user.client, "chat:send", null)).toMatchObject({
+      ok: false
+    });
+    await expectHealthy();
+  });
+
+  it("sobrevive a eventos emitidos sem callback de ack", async () => {
+    const observer = await enterParticipant("Observador");
+    const observerEvents = eventLog(observer.client);
+    const client = await connectClient();
+
+    rawEmit(client, "session:leave");
+
+    const ready = waitForEvent<SessionReady>(client, "session:ready");
+
+    rawEmit(client, "room:enter", {
+      room: "papo-livre",
+      nick: "Sem Ack",
+      color: "#123456"
+    });
+    expect((await ready).self?.nick).toBe("Sem Ack");
+    rawEmit(client, "chat:send", {
+      text: "sem ack",
+      recipient: "Todos",
+      private: false
+    });
+    await eventually(() => {
+      expect(observerEvents.some((event) => event.text === "sem ack")).toBe(
+        true
+      );
+    });
+    rawEmit(client, "session:leave");
+    await eventually(() => {
+      expect(app.chat.activeSessions.size).toBe(1);
+    });
+    await expectHealthy();
+  });
+
+  it("rejeita private não booleano", async () => {
+    const user = await enterParticipant("Booleano");
+
+    await enterParticipant("Alvo");
+
+    for (const value of ["sim", 1]) {
+      expect(
+        await emitWithAck(user.client, "chat:send", {
+          text: "olá",
+          recipient: "Alvo",
+          private: value
+        })
+      ).toMatchObject({ ok: false });
+    }
+
+    expect(await app.chat.messages.countDocuments({ tipo: "message" })).toBe(0);
+  });
+
+  it("rejeita nick com caracteres de controle ou largura zero", async () => {
+    const client = await connectClient();
+
+    for (const nick of ["Ana\u200b", "Todos\u200b", "A\u0007"]) {
+      expect(
+        await emitWithAck(client, "room:enter", {
+          room: "papo-livre",
+          nick,
+          color: "#123456"
+        })
+      ).toMatchObject({ ok: false });
+    }
+
+    expect(app.chat.activeSessions.size).toBe(0);
+  });
+
+  it("anuncia a saída mesmo se a gravação de leftAt falhar", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failOperations = new Set<string>();
+
+    await restartWithFailures(failOperations);
+
+    const leaver = await enterParticipant("Saindo");
+    const observer = await enterParticipant("Ficando");
+    const observerEvents = eventLog(observer.client);
+    const userLists: string[][] = [];
+    const counts: number[] = [];
+
+    observer.client.on("room:users", ({ users }) =>
+      userLists.push(users.map((user) => user.nick))
+    );
+    observer.client.on("rooms:update", (rooms) =>
+      counts.push(rooms.find((room) => room.id === "papo-livre")?.count ?? -1)
+    );
+    failOperations.add("sessions.updateOne");
+
+    expect(await emitWithAck(leaver.client, "session:leave")).toMatchObject({
+      ok: false
+    });
+    await eventually(() => {
+      expect(userLists.at(-1)).toEqual(["Ficando"]);
+      expect(counts.at(-1)).toBe(1);
+      expect(
+        observerEvents.some((event) => event.text === "Saindo saiu do chat")
+      ).toBe(true);
+    });
+    errorSpy.mockRestore();
+  });
+
+  it("normaliza o nick da URL na conversa administrativa", async () => {
+    const ana = await enterParticipant("Ana Maria");
+    const bob = await enterParticipant("Bob");
+    const bobEvents = eventLog(bob.client);
+
+    expect(
+      await emitWithAck(ana.client, "chat:send", {
+        text: "segredo da ana",
+        recipient: "Bob",
+        private: true
+      })
+    ).toMatchObject({ ok: true });
+    await eventually(() => {
+      expect(bobEvents.some((event) => event.private)).toBe(true);
+    });
+
+    const response = await fetch(
+      `${baseUrl}/api/admin/users/${encodeURIComponent("  ana   maria ")}/conversation?room=papo-livre`,
+      { headers: adminHeaders }
+    );
+    const conversation = (await response.json()) as Array<{ texto: string }>;
+
+    expect(conversation.map((message) => message.texto)).toContain(
+      "segredo da ana"
+    );
+  });
+
+  it("exclui da conversa administrativa reservadas de terceiros e mensagens fora da janela", async () => {
+    const b = await enterParticipant("Beto");
+    const c = await enterParticipant("Cris");
+    const cEvents = eventLog(c.client);
+
+    expect(
+      await emitWithAck(b.client, "chat:send", {
+        text: "antes de Ana",
+        recipient: "Todos",
+        private: false
+      })
+    ).toMatchObject({ ok: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await enterParticipant("Ana");
+    expect(
+      await emitWithAck(b.client, "chat:send", {
+        text: "reservada entre terceiros",
+        recipient: "Cris",
+        private: true
+      })
+    ).toMatchObject({ ok: true });
+    await eventually(() => {
+      expect(cEvents.some((event) => event.private)).toBe(true);
+    });
+
+    const response = await fetch(
+      `${baseUrl}/api/admin/users/Ana/conversation?room=papo-livre`,
+      { headers: adminHeaders }
+    );
+    const texts = ((await response.json()) as Array<{ texto: string }>).map(
+      (message) => message.texto
+    );
+
+    expect(texts).not.toContain("antes de Ana");
+    expect(texts).not.toContain("reservada entre terceiros");
+    expect(texts).toContain("Ana entrou no chat");
+  });
+
+  it("recusa admin com esquema não Bearer ou token de tamanho diferente", async () => {
+    for (const authorization of [
+      "Basic test-admin-token",
+      "Bearer test-admin-tokenx",
+      "Bearer x"
+    ]) {
+      const response = await fetch(
+        `${baseUrl}/api/admin/users/Ana/conversation?room=papo-livre`,
+        { headers: { authorization } }
+      );
+
+      expect(response.status).toBe(401);
+    }
+  });
+
+  it("desconecta o socket anterior com motivo de servidor ao retomar em outro", async () => {
+    const original = await enterParticipant("Duplicada");
+    const observer = await enterParticipant("Testemunha");
+    const observerEvents = eventLog(observer.client);
+    const disconnected = new Promise<string>((resolve) =>
+      original.client.once("disconnect", resolve)
+    );
+    const replacement = await connectClient();
+
+    expect(
+      await emitWithAck(replacement, "session:resume", {
+        token: original.session.token
+      })
+    ).toMatchObject({ ok: true });
+    expect(await disconnected).toBe("io server disconnect");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(
+      observerEvents.filter((event) => event.type === "leave")
+    ).toHaveLength(0);
+    expect(
+      app.chat.roomSummaries().find((room) => room.id === "papo-livre")?.count
+    ).toBe(2);
+  });
+
+  it("limita flood de mensagens", async () => {
+    const user = await enterParticipant("Flooder");
+    const results: ActionResult[] = [];
+
+    for (let index = 0; index < 6; index += 1) {
+      results.push(
+        await emitWithAck(user.client, "chat:send", {
+          text: `msg ${index}`,
+          recipient: "Todos",
+          private: false
+        })
+      );
+    }
+
+    expect(results.slice(0, 5).every((result) => result.ok)).toBe(true);
+    expect(results[5]).toMatchObject({
+      ok: false,
+      error: "Você está enviando mensagens rápido demais."
+    });
+  });
+
+  it("usa a última atividade e não o horário do restart nos eventos de saída sintéticos", async () => {
+    const enteredAt = new Date(Date.now() - 10_000);
+    const lastActivity = new Date(enteredAt.getTime() + 4_000);
+
+    await app.chat.sessions.insertOne({
+      token: "sessao-antiga",
+      nick: "Antiga",
+      nickNormalizado: "antiga",
+      cor: "#123456",
+      sala: "papo-livre",
+      modo: "participant",
+      enteredAt,
+      leftAt: null,
+      selectedRecipient: null
+    });
+    await app.chat.messages.insertOne({
+      sala: "papo-livre",
+      tipo: "message",
+      remetente: "Antiga",
+      destinatario: "Todos",
+      reservada: false,
+      texto: "última fala",
+      createdAt: lastActivity
+    });
+
+    await app.chat.initialize();
+
+    const leave = await app.chat.messages.findOne({
+      remetente: "Antiga",
+      tipo: "leave"
+    });
+
+    expect(leave?.createdAt.getTime()).toBe(lastActivity.getTime());
+  });
+
+  it("grava nicks normalizados nas mensagens e mantém o fallback para documentos antigos", async () => {
+    const ana = await enterParticipant("Ana Maria");
+    const bob = await enterParticipant("Bob");
+    const bobEvents = eventLog(bob.client);
+
+    expect(
+      await emitWithAck(ana.client, "chat:send", {
+        text: "mensagem nova",
+        recipient: "Bob",
+        private: true
+      })
+    ).toMatchObject({ ok: true });
+    await eventually(() => {
+      expect(bobEvents.some((event) => event.private)).toBe(true);
+    });
+    expect(
+      await app.chat.messages.findOne({ texto: "mensagem nova" })
+    ).toMatchObject({
+      remetenteNormalizado: "ana maria",
+      destinatarioNormalizado: "bob"
+    });
+
+    const session = await app.chat.sessions.findOne({
+      nickNormalizado: "ana maria"
+    });
+
+    await app.chat.messages.insertOne({
+      sala: "papo-livre",
+      tipo: "message",
+      remetente: "Bob",
+      destinatario: "ana maria",
+      reservada: true,
+      texto: "mensagem antiga",
+      createdAt: new Date(session!.enteredAt.getTime() + 1)
+    });
+
+    const response = await fetch(
+      `${baseUrl}/api/admin/users/${encodeURIComponent(" ANA  maria")}/conversation?room=papo-livre`,
+      { headers: adminHeaders }
+    );
+    const texts = ((await response.json()) as Array<{ texto: string }>).map(
+      (message) => message.texto
+    );
+
+    expect(texts).toContain("mensagem nova");
+    expect(texts).toContain("mensagem antiga");
+  });
 });

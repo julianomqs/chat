@@ -8,15 +8,11 @@ import {
   type ChatEvent,
   type ChatUser,
   type ClientToServerEvents,
-  type EnterRoomPayload,
   type RoomId,
   type RoomSummary,
-  type SelectRecipientPayload,
-  type SendMessagePayload,
   type ServerToClientEvents,
   type SessionMode,
-  type SessionReady,
-  type SpyRoomPayload
+  type SessionReady
 } from "./types.js";
 
 export interface SessionDocument {
@@ -39,6 +35,8 @@ export interface MessageDocument {
   reservada: boolean;
   texto: string;
   createdAt: Date;
+  remetenteNormalizado?: string;
+  destinatarioNormalizado?: string;
 }
 
 export interface ChatServerOptions {
@@ -50,6 +48,7 @@ export interface ChatServerOptions {
 interface ActiveSession extends SessionDocument {
   socketId: string | null;
   disconnectTimer: ReturnType<typeof setTimeout> | null;
+  recentSends: number[];
 }
 
 type ChatSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -62,6 +61,21 @@ const isRoom = (room: string): room is RoomId =>
   ROOMS.some((candidate) => candidate.id === room);
 const isColor = (color: string): boolean => /^#[0-9A-Fa-f]{6}$/u.test(color);
 const resultError = (error: string): ActionResult => ({ ok: false, error });
+const hasInvisibleCharacters = (value: string): boolean =>
+  /[\p{Cc}\p{Cf}]/u.test(value);
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const safeAck =
+  (ack: unknown) =>
+  (result: ActionResult): void => {
+    if (typeof ack === "function") {
+      ack(result);
+    }
+  };
+
+const SEND_LIMIT = 5;
+const SEND_WINDOW_MS = 5_000;
 
 export class ChatServer {
   readonly io: Server<ClientToServerEvents, ServerToClientEvents>;
@@ -69,6 +83,7 @@ export class ChatServer {
   readonly messages: Collection<MessageDocument>;
   readonly activeSessions = new Map<string, ActiveSession>();
   readonly nickReservations = new Map<string, string>();
+  private readonly tokenBySocket = new Map<string, string>();
   private readonly disconnectGraceMs: number;
   private isClosing = false;
 
@@ -92,22 +107,28 @@ export class ChatServer {
         remetente: 1,
         destinatario: 1,
         reservada: 1
-      })
+      }),
+      this.messages.createIndex({ sala: 1, remetenteNormalizado: 1 }),
+      this.messages.createIndex({ sala: 1, destinatarioNormalizado: 1 })
     ]);
 
     const abandoned = await this.sessions.find({ leftAt: null }).toArray();
     const restartedAt = new Date();
-    const leaveRecords = abandoned
-      .filter((session) => session.modo === "participant" && session.nick)
-      .map((session) => ({
-        sala: session.sala,
-        tipo: "leave" as const,
-        remetente: session.nick ?? "",
-        destinatario: "Todos",
-        reservada: false,
-        texto: `${session.nick ?? "Usuário"} saiu do chat`,
-        createdAt: restartedAt
-      }));
+    const leaveRecords = await Promise.all(
+      abandoned
+        .filter((session) => session.modo === "participant" && session.nick)
+        .map(async (session) => ({
+          sala: session.sala,
+          tipo: "leave" as const,
+          remetente: session.nick ?? "",
+          destinatario: "Todos",
+          remetenteNormalizado: nicknameNormalize(session.nick ?? ""),
+          destinatarioNormalizado: "todos",
+          reservada: false,
+          texto: `${session.nick ?? "Usuário"} saiu do chat`,
+          createdAt: await this.lastActivityOf(session, restartedAt)
+        }))
+    );
 
     if (leaveRecords.length > 0) {
       await this.messages.insertMany(leaveRecords);
@@ -119,6 +140,23 @@ export class ChatServer {
     );
     this.activeSessions.clear();
     this.nickReservations.clear();
+    this.tokenBySocket.clear();
+  };
+
+  private lastActivityOf = async (
+    session: SessionDocument,
+    fallback: Date
+  ): Promise<Date> => {
+    const last = await this.messages.findOne(
+      {
+        sala: session.sala,
+        remetente: session.nick ?? "",
+        createdAt: { $gte: session.enteredAt, $lte: fallback }
+      },
+      { sort: { createdAt: -1 } }
+    );
+
+    return last?.createdAt ?? session.enteredAt;
   };
 
   roomSummaries = (): RoomSummary[] => {
@@ -142,45 +180,71 @@ export class ChatServer {
     this.io.close();
   };
 
+  private handle = (
+    ack: unknown,
+    task: (reply: (result: ActionResult) => void) => void | Promise<void>
+  ): void => {
+    const reply = safeAck(ack);
+
+    const fail = (error: unknown): void => {
+      console.error("Falha ao tratar evento", error);
+      reply(resultError("Requisição inválida."));
+    };
+
+    try {
+      Promise.resolve(task(reply)).catch(fail);
+    } catch (error) {
+      fail(error);
+    }
+  };
+
   private registerSocket = (socket: ChatSocket): void => {
     socket.emit("rooms:update", this.roomSummaries());
-    socket.on("room:enter", (payload, ack) => {
-      void this.enter(socket, payload, ack);
+    socket.on("room:enter", (payload: unknown, ack: unknown) => {
+      this.handle(ack, (reply) => this.enter(socket, payload, reply));
     });
-    socket.on("room:spy", (payload, ack) => {
-      void this.spy(socket, payload, ack);
+    socket.on("room:spy", (payload: unknown, ack: unknown) => {
+      this.handle(ack, (reply) => this.spy(socket, payload, reply));
     });
-    socket.on("session:resume", (payload, ack) => {
-      void this.resume(socket, payload.token, ack);
+    socket.on("session:resume", (payload: unknown, ack: unknown) => {
+      this.handle(ack, (reply) => this.resume(socket, payload, reply));
     });
-    socket.on("session:leave", (ack) => {
-      const session = this.sessionForSocket(socket);
+    socket.on("session:leave", (ack: unknown) => {
+      this.handle(ack, (reply) => {
+        const session = this.sessionForSocket(socket);
 
-      if (!session) {
-        return ack(resultError("Você não está em uma sala."));
-      }
+        if (!session) {
+          return reply(resultError("Você não está em uma sala."));
+        }
 
-      void this.finalizeSession(session, true)
-        .then(() => ack({ ok: true }))
-        .catch((error: unknown) => {
-          console.error("Falha ao finalizar sessão", error);
-          ack(resultError("Não foi possível sair da sala."));
-        });
+        void this.finalizeSession(session, true)
+          .then(() => reply({ ok: true }))
+          .catch((error: unknown) => {
+            console.error("Falha ao finalizar sessão", error);
+            reply(resultError("Não foi possível sair da sala."));
+          });
+      });
     });
-    socket.on("chat:send", (payload, ack) => {
-      void this.sendMessage(socket, payload, ack);
+    socket.on("chat:send", (payload: unknown, ack: unknown) => {
+      this.handle(ack, (reply) => this.sendMessage(socket, payload, reply));
     });
-    socket.on("chat:select-recipient", (payload) => {
-      this.selectRecipient(socket, payload);
+    socket.on("chat:select-recipient", (payload: unknown) => {
+      this.handle(undefined, () => {
+        this.selectRecipient(socket, payload);
+      });
     });
     socket.on("disconnect", () => this.handleDisconnect(socket));
   };
 
   private enter = async (
     socket: ChatSocket,
-    payload: EnterRoomPayload,
+    payload: unknown,
     ack: (result: ActionResult) => void
   ): Promise<void> => {
+    if (!isObject(payload)) {
+      return ack(resultError("Requisição inválida."));
+    }
+
     if (this.sessionForSocket(socket)) {
       return ack(resultError("Este socket já possui uma sessão ativa."));
     }
@@ -199,7 +263,7 @@ export class ChatServer {
       return ack(resultError("O apelido deve ter entre 1 e 20 caracteres."));
     }
 
-    if (nicknameNormalize(nick) === "todos") {
+    if (hasInvisibleCharacters(nick) || nicknameNormalize(nick) === "todos") {
       return ack(resultError("Este apelido não está disponível."));
     }
 
@@ -228,11 +292,13 @@ export class ChatServer {
       leftAt: null,
       selectedRecipient: null,
       socketId: socket.id,
-      disconnectTimer: null
+      disconnectTimer: null,
+      recentSends: []
     };
 
     this.nickReservations.set(reservationKey, token);
     this.activeSessions.set(token, session);
+    this.tokenBySocket.set(socket.id, token);
 
     let sessionPersisted = false;
     let socketJoinedRoom = false;
@@ -254,6 +320,7 @@ export class ChatServer {
       session.leftAt = new Date();
       this.activeSessions.delete(token);
       this.nickReservations.delete(reservationKey);
+      this.tokenBySocket.delete(socket.id);
 
       if (socketJoinedRoom) {
         socket.leave(room);
@@ -277,9 +344,13 @@ export class ChatServer {
 
   private spy = async (
     socket: ChatSocket,
-    payload: SpyRoomPayload,
+    payload: unknown,
     ack: (result: ActionResult) => void
   ): Promise<void> => {
+    if (!isObject(payload)) {
+      return ack(resultError("Requisição inválida."));
+    }
+
     if (this.sessionForSocket(socket)) {
       return ack(resultError("Este socket já possui uma sessão ativa."));
     }
@@ -302,10 +373,12 @@ export class ChatServer {
       leftAt: null,
       selectedRecipient: null,
       socketId: socket.id,
-      disconnectTimer: null
+      disconnectTimer: null,
+      recentSends: []
     };
 
     this.activeSessions.set(session.token, session);
+    this.tokenBySocket.set(socket.id, session.token);
 
     try {
       await this.sessions.insertOne(this.toDocument(session));
@@ -314,6 +387,7 @@ export class ChatServer {
       ack({ ok: true });
     } catch (error) {
       this.activeSessions.delete(session.token);
+      this.tokenBySocket.delete(socket.id);
       ack(resultError("Não foi possível entrar em modo espiar."));
       console.error("Falha ao criar sessão de espião", error);
     }
@@ -321,9 +395,11 @@ export class ChatServer {
 
   private resume = async (
     socket: ChatSocket,
-    token: string,
+    payload: unknown,
     ack: (result: ActionResult) => void
   ): Promise<void> => {
+    const token = isObject(payload) ? payload.token : undefined;
+
     if (typeof token !== "string") {
       return ack(resultError("Sessão inválida ou expirada."));
     }
@@ -351,8 +427,10 @@ export class ChatServer {
     const previousSocketId = session.socketId;
 
     session.socketId = socket.id;
+    this.tokenBySocket.set(socket.id, token);
 
     if (previousSocketId && previousSocketId !== socket.id) {
+      this.tokenBySocket.delete(previousSocketId);
       this.io.sockets.sockets.get(previousSocketId)?.disconnect(true);
     }
 
@@ -369,9 +447,13 @@ export class ChatServer {
 
   private sendMessage = async (
     socket: ChatSocket,
-    payload: SendMessagePayload,
+    payload: unknown,
     ack: (result: ActionResult) => void
   ): Promise<void> => {
+    if (!isObject(payload)) {
+      return ack(resultError("Mensagem inválida."));
+    }
+
     const session = this.sessionForSocket(socket);
 
     if (!session) {
@@ -385,6 +467,22 @@ export class ChatServer {
     if (typeof payload.text !== "string") {
       return ack(resultError("Mensagem inválida."));
     }
+
+    if (typeof payload.private !== "boolean") {
+      return ack(resultError("Mensagem inválida."));
+    }
+
+    const now = Date.now();
+
+    session.recentSends = session.recentSends.filter(
+      (sentAt) => now - sentAt < SEND_WINDOW_MS
+    );
+
+    if (session.recentSends.length >= SEND_LIMIT) {
+      return ack(resultError("Você está enviando mensagens rápido demais."));
+    }
+
+    session.recentSends.push(now);
 
     const text = payload.text.trim();
 
@@ -438,15 +536,7 @@ export class ChatServer {
     };
 
     try {
-      await this.messages.insertOne({
-        sala: event.room,
-        tipo: event.type,
-        remetente: event.sender,
-        destinatario: event.recipient,
-        reservada: event.private,
-        texto: event.text,
-        createdAt: new Date(event.createdAt)
-      });
+      await this.messages.insertOne(this.toMessageDocument(event));
 
       if (event.private && recipientSession) {
         this.emitToSession(session, event);
@@ -465,13 +555,15 @@ export class ChatServer {
     }
   };
 
-  private selectRecipient = (
-    socket: ChatSocket,
-    payload: SelectRecipientPayload
-  ): void => {
+  private selectRecipient = (socket: ChatSocket, payload: unknown): void => {
     const session = this.sessionForSocket(socket);
 
-    if (!session || session.modo !== "participant") {
+    if (
+      !session ||
+      session.modo !== "participant" ||
+      !isObject(payload) ||
+      (payload.recipient !== null && typeof payload.recipient !== "string")
+    ) {
       return;
     }
 
@@ -527,6 +619,7 @@ export class ChatServer {
       return;
     }
 
+    this.tokenBySocket.delete(socket.id);
     session.socketId = null;
     session.disconnectTimer = setTimeout(() => {
       if (session.socketId === null) {
@@ -566,6 +659,7 @@ export class ChatServer {
 
     if (session.socketId) {
       this.io.sockets.sockets.get(session.socketId)?.leave(session.sala);
+      this.tokenBySocket.delete(session.socketId);
     }
 
     if (
@@ -598,30 +692,58 @@ export class ChatServer {
     }
 
     this.activeSessions.delete(session.token);
-    await this.sessions.updateOne(
-      { token: session.token },
-      { $set: { leftAt: session.leftAt } }
-    );
+
+    let failure: Error | null = null;
+
+    const remember = (error: unknown): void => {
+      console.error("Falha ao persistir saída da sessão", error);
+      failure ??= error instanceof Error ? error : new Error(String(error));
+    };
+
+    try {
+      await this.sessions.updateOne(
+        { token: session.token },
+        { $set: { leftAt: session.leftAt } }
+      );
+    } catch (error) {
+      remember(error);
+    }
 
     if (leaveEvent) {
-      await this.persistAndBroadcast(leaveEvent);
+      try {
+        await this.persistAndBroadcast(leaveEvent);
+      } catch (error) {
+        remember(error);
+        this.io.to(leaveEvent.room).emit("chat:event", leaveEvent);
+      }
+
       this.broadcastRoomState(session.sala);
     }
 
     this.broadcastRoomSummaries();
+
+    if (failure) {
+      throw failure;
+    }
   };
 
   private persistAndBroadcast = async (event: ChatEvent): Promise<void> => {
-    await this.messages.insertOne({
+    await this.messages.insertOne(this.toMessageDocument(event));
+    this.io.to(event.room).emit("chat:event", event);
+  };
+
+  private toMessageDocument = (event: ChatEvent): MessageDocument => {
+    return {
       sala: event.room,
       tipo: event.type,
       remetente: event.sender,
       destinatario: event.recipient,
+      remetenteNormalizado: nicknameNormalize(event.sender),
+      destinatarioNormalizado: nicknameNormalize(event.recipient),
       reservada: event.private,
       texto: event.text,
       createdAt: new Date(event.createdAt)
-    });
-    this.io.to(event.room).emit("chat:event", event);
+    };
   };
 
   private makeEvent = (
@@ -651,9 +773,9 @@ export class ChatServer {
   private sessionForSocket = (
     socket: ChatSocket
   ): ActiveSession | undefined => {
-    return [...this.activeSessions.values()].find(
-      (session) => session.socketId === socket.id
-    );
+    const token = this.tokenBySocket.get(socket.id);
+
+    return token ? this.activeSessions.get(token) : undefined;
   };
 
   private usersInRoom = (room: RoomId): ChatUser[] => {
@@ -714,7 +836,13 @@ export const userConversation = async (
   nick: string,
   room: RoomId
 ): Promise<WithId<MessageDocument>[]> => {
-  const normalized = nicknameNormalize(nick);
+  const cleanNick = cleanNickname(nick);
+
+  if (cleanNick === "") {
+    return [];
+  }
+
+  const normalized = nicknameNormalize(cleanNick);
   const userSessions = await sessions
     .find({ sala: room, nickNormalizado: normalized })
     .toArray();
@@ -739,9 +867,21 @@ export const userConversation = async (
           $or: [
             { tipo: { $in: ["join", "leave"] } },
             { reservada: false },
-            { remetente: { $regex: `^${escapeRegex(nick)}$`, $options: "i" } },
+            { remetenteNormalizado: normalized },
+            { destinatarioNormalizado: normalized },
             {
-              destinatario: { $regex: `^${escapeRegex(nick)}$`, $options: "i" }
+              remetenteNormalizado: { $exists: false },
+              remetente: {
+                $regex: `^${escapeRegex(cleanNick)}$`,
+                $options: "i"
+              }
+            },
+            {
+              destinatarioNormalizado: { $exists: false },
+              destinatario: {
+                $regex: `^${escapeRegex(cleanNick)}$`,
+                $options: "i"
+              }
             }
           ]
         }

@@ -7,6 +7,7 @@ import {
   screen,
   waitFor
 } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChatEvent,
@@ -518,5 +519,81 @@ describe("chat de participantes e espiões", () => {
     });
 
     expect(await screen.findByText(/mensagem pública/)).toBeInTheDocument();
+  });
+});
+
+describe("robustez do cliente", () => {
+  const alice: ChatUser = { nick: "Alice", color: "#112233" };
+  const bob: ChatUser = { nick: "Bruno", color: "#445566" };
+
+  it("mostra o erro quando a saída falha", async () => {
+    render(<App />);
+    await dispatchAndFlush(
+      "session:ready",
+      readySession("participant", [alice, bob])
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Sair da sala/ }));
+
+    const leaveAck = harness.socket.emit.mock.calls.at(-1)?.at(-1);
+
+    await act(async () => {
+      Reflect.apply(leaveAck as () => void, undefined, [
+        { ok: false, error: "Falha ao sair" }
+      ]);
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Falha ao sair");
+    expect(
+      screen.queryByRole("heading", { name: /Participantes/ })
+    ).not.toBeInTheDocument();
+  });
+
+  it("emite select-recipient uma única vez quando o destinatário sai", async () => {
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>
+    );
+    await dispatchAndFlush(
+      "session:ready",
+      readySession("participant", [alice, bob])
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Bruno/ }));
+    harness.socket.emit.mockClear();
+    await dispatchAndFlush("room:users", {
+      room: "papo-livre",
+      users: [alice]
+    });
+
+    const resets = harness.socket.emit.mock.calls.filter(
+      ([event, payload]) =>
+        event === "chat:select-recipient" &&
+        (payload as { recipient: string | null }).recipient === null
+    );
+
+    expect(resets).toHaveLength(1);
+    expect(
+      screen.getByRole("checkbox", { name: /Reservadamente/ })
+    ).not.toBeChecked();
+    expect(
+      screen.getByPlaceholderText("Escreva sua mensagem...")
+    ).toBeInTheDocument();
+  });
+
+  it("informa sessão aberta em outra aba ao ser desconectado pelo servidor", async () => {
+    render(<App />);
+    await dispatchAndFlush(
+      "session:ready",
+      readySession("participant", [alice, bob])
+    );
+    await dispatchSocketEvent("disconnect", "io server disconnect");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Sua sessão foi aberta em outra aba ou janela."
+    );
+    expect(
+      screen.queryByRole("heading", { name: /Participantes/ })
+    ).not.toBeInTheDocument();
+    expect(harness.socket.connect).toHaveBeenCalledTimes(2);
   });
 });

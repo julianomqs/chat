@@ -272,3 +272,30 @@ test("token inválido rejeitado pelo servidor retorna à tela de salas", async (
     await page.evaluate(() => sessionStorage.getItem("batepapo:session"))
   ).toBeNull();
 });
+
+test("aba duplicada não deixa a aba original travada", async ({ page }) => {
+  await enterRoom(page, "E2E Duplicada", "Esportes");
+
+  const token = await page.evaluate(() =>
+    sessionStorage.getItem("batepapo:session")
+  );
+  const copy = await page.context().newPage();
+
+  await copy.addInitScript((value) => {
+    if (value) {
+      sessionStorage.setItem("batepapo:session", value);
+    }
+  }, token);
+  await copy.goto("/");
+  await expect(
+    copy.getByRole("heading", { name: /Participantes/ })
+  ).toBeVisible();
+  await expect(
+    page.getByText("Sua sessão foi aberta em outra aba ou janela.")
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /Participantes/ })
+  ).toHaveCount(0);
+
+  await copy.getByRole("button", { name: "Sair da sala" }).click();
+});

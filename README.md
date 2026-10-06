@@ -45,6 +45,14 @@ O Playwright cobre entrada, nick duplicado, envio por Enter, mensagens públicas
 
 Lint e formatação podem ser verificados em cada serviço com `npm run lint` e `npm run format:check`.
 
+## Regras de servidor e operação
+
+- Apelidos não podem conter caracteres de controle nem invisíveis (como espaço de largura zero).
+- O envio de mensagens é limitado a 5 por sessão a cada 5 segundos; acima disso o servidor responde com erro.
+- Se a mesma sessão for aberta em outra aba ou janela (por exemplo, ao duplicar a aba), a aba anterior é desconectada, mostra um aviso e volta para a lista de salas.
+- O compose de produção (`prod.docker-compose.yml`) não publica as portas do MongoDB nem do backend; todo acesso externo passa pelo Nginx do frontend.
+- `PORT` assume 3000 quando ausente. Os eventos de saída gerados na inicialização para sessões abandonadas usam o horário da última atividade conhecida da sessão.
+
 ## Arquitetura
 
 Monorepo TypeScript strict. O backend Node 24 LTS é a autoridade para presença, validação e entrega privada. O MongoDB registra sessões e mensagens; a UI não lê histórico. O frontend usa Vite, React, Tailwind CSS v4 pelo plugin oficial do Vite e Socket.io Client. Um proxy no Vite em desenvolvimento e no Nginx em produção encaminha API e WebSocket; o navegador usa a mesma origem e o backend não precisa de CORS.

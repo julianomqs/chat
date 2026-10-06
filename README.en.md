@@ -43,6 +43,14 @@ Playwright covers room entry, duplicate nicknames, sending with Enter, public an
 
 Run `npm run lint` and `npm run format:check` in each service to check linting and formatting.
 
+## Server rules and operations
+
+- Nicknames cannot contain control or invisible characters (such as zero-width spaces).
+- Sending messages is limited to 5 per session every 5 seconds; beyond that the server replies with an error.
+- If the same session is opened in another tab or window (for example, by duplicating the tab), the previous tab is disconnected, shows a notice and returns to the room list.
+- The production compose file (`prod.docker-compose.yml`) does not publish the MongoDB or backend ports; all external access goes through the frontend's Nginx.
+- `PORT` defaults to 3000 when unset. Synthetic leave events created at startup for abandoned sessions use the session's last known activity time.
+
 ## Architecture
 
 Strict TypeScript monorepo. The Node.js 24 LTS backend is the authority for presence, validation, and private message delivery. MongoDB records sessions and messages; the UI does not read message history. The frontend uses Vite, React, Tailwind CSS v4 through the official Vite plugin, and Socket.io Client. A Vite proxy in development and Nginx in production forward API and WebSocket traffic; the browser uses the same origin, so the backend does not need CORS.

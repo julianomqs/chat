@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -36,9 +37,14 @@ export const App = () => {
   const [messages, setMessages] = useState<ChatEvent[]>([]);
   const [nickname, setNickname] = useState("");
   const [nicknameColor, setNicknameColor] = useState("#3658d4");
-  const [selectedRecipient, setSelectedRecipient] = useState<string | null>(
-    null
-  );
+  const [selectedRecipient, setSelectedRecipientState] = useState<
+    string | null
+  >(null);
+  const selectedRecipientRef = useRef<string | null>(null);
+  const setSelectedRecipient = useCallback((recipient: string | null) => {
+    selectedRecipientRef.current = recipient;
+    setSelectedRecipientState(recipient);
+  }, []);
   const [privateMessage, setPrivateMessage] = useState(true);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
@@ -70,7 +76,20 @@ export const App = () => {
         }
       });
     });
-    socket.on("disconnect", () => setConnected(false));
+    socket.on("disconnect", (reason) => {
+      setConnected(false);
+
+      if (reason === "io server disconnect") {
+        sessionStorage.removeItem(SESSION_KEY);
+        setSession(null);
+        setActiveRoom(null);
+        setUsers([]);
+        setMessages([]);
+        setSelectedRecipient(null);
+        setError("Sua sessão foi aberta em outra aba ou janela.");
+        socket.connect();
+      }
+    });
     socket.on("rooms:update", setRooms);
     socket.on("session:ready", (ready) => {
       sessionStorage.setItem(SESSION_KEY, ready.token);
@@ -93,26 +112,25 @@ export const App = () => {
     });
     socket.on("room:users", ({ users: nextUsers }) => {
       setUsers(nextUsers);
-      setSelectedRecipient((current) => {
-        if (!current || current.toLocaleLowerCase("pt-BR") === "todos") {
-          return null;
-        }
 
-        const stillHere = nextUsers.some(
-          (user) =>
-            user.nick.toLocaleLowerCase("pt-BR") ===
-            current.toLocaleLowerCase("pt-BR")
-        );
+      const current = selectedRecipientRef.current;
 
-        if (!stillHere) {
-          setPrivateMessage(false);
-          socket.emit("chat:select-recipient", { recipient: null });
+      if (!current) {
+        return;
+      }
 
-          return null;
-        }
+      const lowered = current.toLocaleLowerCase("pt-BR");
+      const stillHere = nextUsers.some(
+        (user) => user.nick.toLocaleLowerCase("pt-BR") === lowered
+      );
 
-        return current;
-      });
+      if (lowered === "todos") {
+        setSelectedRecipient(null);
+      } else if (!stillHere) {
+        setSelectedRecipient(null);
+        setPrivateMessage(false);
+        socket.emit("chat:select-recipient", { recipient: null });
+      }
     });
     socket.on("chat:event", (event) => {
       setMessages((current) => [...current, event]);
@@ -125,7 +143,7 @@ export const App = () => {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, []);
+  }, [setSelectedRecipient]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -259,10 +277,6 @@ export const App = () => {
     }
 
     socket.emit("session:leave", (result) => {
-      if (!result.ok) {
-        setError(result.error ?? "Não foi possível sair da sala.");
-      }
-
       sessionStorage.removeItem(SESSION_KEY);
       setSession(null);
       setActiveRoom(null);
@@ -270,7 +284,9 @@ export const App = () => {
       setUsers([]);
       setSelectedRecipient(null);
       setPrivateMessage(true);
-      setError("");
+      setError(
+        result.ok ? "" : (result.error ?? "Não foi possível sair da sala.")
+      );
     });
   };
 
